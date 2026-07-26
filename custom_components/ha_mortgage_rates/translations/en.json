@@ -21,7 +21,7 @@
     },
     "error": {
       "invalid_amount": "Mortgage amount must be less than property value.",
-      "invalid_value": "Property value must be greater than 0."
+      "invalid_value": "Please enter a valid value."
     },
     "abort": {
       "already_configured": "This mortgage scenario is already configured."

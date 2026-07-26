@@ -13,14 +13,18 @@ from .const import (
     CONF_TERM,
     DEFAULT_TERM,
     DOMAIN,
+    PURPOSE_BTL,
+    PURPOSE_FTB,
+    PURPOSE_HOME_MOVER,
+    PURPOSE_REMORTGAGE,
     PURPOSES,
 )
 
 PURPOSE_LABELS = {
-    "remortgage": "Remortgage",
-    "first_time_buyer": "First Time Buyer",
-    "home_mover": "Home Mover",
-    "buy_to_let": "Buy to Let",
+    PURPOSE_REMORTGAGE: "Remortgage",
+    PURPOSE_FTB: "First Time Buyer",
+    PURPOSE_HOME_MOVER: "Home Mover",
+    PURPOSE_BTL: "Buy to Let",
 }
 
 

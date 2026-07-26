@@ -42,16 +42,15 @@ def _install_fake_module(name: str) -> _MockModule:
 
 # Install the homeassistant package and all sub-modules that the custom
 # component imports (either directly or transitively).
+# Only fake the modules that MUST be mock namespaces. Everything else is
+# pre-imported in conftest.py (which loads first) so the real modules
+# survive the root shadow and remain importable by other test files.
+# homeassistant.config_entries is kept real (pre-imported) so that
+# ConfigEntry remains a real class for test_coordinator fixtures.
 _FAKE_MODULES = [
     "homeassistant",
-    "homeassistant.config_entries",
-    "homeassistant.const",
-    "homeassistant.core",
-    "homeassistant.exceptions",
     "homeassistant.helpers",
-    "homeassistant.helpers.aiohttp_client",
     "homeassistant.helpers.selector",
-    "homeassistant.helpers.update_coordinator",
 ]
 
 for _name in _FAKE_MODULES:
