@@ -4,7 +4,6 @@ from __future__ import annotations
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigFlow, FlowResult
-from homeassistant.helpers import selector
 
 from .const import (
     CONF_MORTGAGE_AMOUNT,
@@ -70,27 +69,17 @@ class MortgageRatesConfigFlow(ConfigFlow, domain=DOMAIN):
                     data=user_input,
                 )
 
+        data_schema = vol.Schema(
+            {
+                vol.Required(CONF_PROPERTY_VALUE): vol.Coerce(int),
+                vol.Required(CONF_MORTGAGE_AMOUNT): vol.Coerce(int),
+                vol.Required(CONF_PURPOSE): vol.In(PURPOSE_LABELS),
+                vol.Optional(CONF_TERM, default=DEFAULT_TERM): vol.Coerce(int),
+            }
+        )
+
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_PROPERTY_VALUE): vol.Coerce(int),
-                    vol.Required(CONF_MORTGAGE_AMOUNT): vol.Coerce(int),
-                    vol.Required(CONF_PURPOSE): selector.SelectSelector(
-                        selector.SelectSelectorConfig(
-                            options=[
-                                selector.SelectOption(
-                                    value=p, label=PURPOSE_LABELS[p]
-                                )
-                                for p in PURPOSES
-                            ],
-                            mode=selector.SelectSelectorMode.DROPDOWN,
-                        )
-                    ),
-                    vol.Optional(CONF_TERM, default=DEFAULT_TERM): vol.Coerce(
-                        int
-                    ),
-                }
-            ),
+            data_schema=data_schema,
             errors=errors,
         )

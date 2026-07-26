@@ -50,7 +50,6 @@ def _install_fake_module(name: str) -> _MockModule:
 _FAKE_MODULES = [
     "homeassistant",
     "homeassistant.helpers",
-    "homeassistant.helpers.selector",
 ]
 
 for _name in _FAKE_MODULES:
@@ -103,12 +102,8 @@ _ce.ConfigFlow = _MockConfigFlow
 _ce.FlowResult = dict
 _ce.AbortFlow = _AbortFlow
 
-_sel = sys.modules["homeassistant.helpers.selector"]
-_sel.SelectSelector = MagicMock()
-_sel.SelectSelector.return_value = lambda v: v  # identity validator
-_sel.SelectSelectorConfig = MagicMock()
-_sel.SelectSelectorMode = MagicMock()
-_sel.SelectOption = MagicMock()
+_ha = sys.modules["homeassistant"]
+_ha.async_create_task = MagicMock()
 
 del _ce, _sel, _name
 
