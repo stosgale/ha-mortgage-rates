@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, FlowResult
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 
 from .const import (
     CONF_MORTGAGE_AMOUNT,
@@ -35,7 +35,7 @@ class MortgageRatesConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(
         self, user_input: dict | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle the initial step."""
         errors: dict[str, str] = {}
 

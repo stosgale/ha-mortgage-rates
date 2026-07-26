@@ -1,7 +1,7 @@
 {
   "domain": "ha_mortgage_rates",
   "name": "UK Mortgage Rates",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "config_flow": true,
   "documentation": "https://github.com/stosgale/ha-mortgage-rates",
   "issue_tracker": "https://github.com/stosgale/ha-mortgage-rates/issues",

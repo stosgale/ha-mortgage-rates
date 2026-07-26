@@ -99,13 +99,13 @@ class _MockConfigFlow:
 # Install well-known HA type mocks on the fake modules.
 _ce = sys.modules["homeassistant.config_entries"]
 _ce.ConfigFlow = _MockConfigFlow
-_ce.FlowResult = dict
+_ce.ConfigFlowResult = dict
 _ce.AbortFlow = _AbortFlow
 
 _ha = sys.modules["homeassistant"]
 _ha.async_create_task = MagicMock()
 
-del _ce, _sel, _name
+del _ce, _name
 
 # ---------------------------------------------------------------------------
 # HA-domain imports – safe once the homeassistant namespace is mocked.
