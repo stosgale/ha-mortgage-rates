@@ -1,0 +1,293 @@
+"""DataUpdateCoordinator for the HA Mortgage Rates integration.
+
+================================================================================
+VALIDATION SPIKE FINDINGS (moneyfactscompare.co.uk)
+================================================================================
+Fetched pages (2026-07-26) with curl and a browser-like User-Agent:
+  - https://moneyfactscompare.co.uk/mortgages/remortgage/
+  - https://moneyfactscompare.co.uk/mortgages/remortgage/60-ltv/
+  - https://moneyfactscompare.co.uk/mortgages/first-time-buyer-mortgages/
+  - https://moneyfactscompare.co.uk/mortgages/moving-home/
+  - https://moneyfactscompare.co.uk/mortgages/buy-to-let/
+
+Server-rendered: YES. Product data is present in the initial HTML as a list of
+`<li class="mortgages-table-item table-item">` items inside `<ul id="finder-table">`.
+No JavaScript execution is required to read the headline fields.
+
+Exact CSS selectors used for extraction (per product row):
+  - Container row:          "li.mortgages-table-item.table-item"
+  - Lender name:            ".table-item-heading-product-name strong"
+  - Initial rate:           first ".table-item-cell .table-item-cell-value strong"
+  - APRC:                   ".table-item-cell.aprc .table-item-cell-value strong"
+  - Max LTV:                ".table-item-cell.max-ltv-small .table-item-cell-value strong"
+  - Product fees:           ".table-item-cell.product-fees .table-item-cell-value strong"
+  - Monthly payment:        ".table-item-cell.initial-monthly-payment .table-item-cell-value strong"
+  - Rate type & initial term:
+      Parsed from the description text in
+      ".table-item-cell .table-item-cell-value .small"
+      e.g. "4.47% Fixed for 2 years" or "4.13% Variable (collared at 0.38%) for 2 years".
+      Rate type regex: (Fixed|Variable|Tracker)
+      Term regex:      "for (\\d+) year"
+
+Pagination: NONE observed. The full product list for the selected LTV/purpose is
+rendered in one page.
+
+LTV filtering: URL-based, not client-side JS. Each purpose exposes LTV-specific
+URLs. Confirmed available bands (manual curl probe):
+  - remortgage:              /mortgages/remortgage/{ltv}-ltv/      -> 60, 75, 80
+  - first_time_buyer:        /mortgages/first-time-buyer-mortgages/{ltv}-ltv/
+                                                                  -> 85, 90, 95, 100
+  - home_mover:              /mortgages/{ltv}-ltv-mortgages/       -> 60, 75, 80, 85, 90, 95
+  - buy_to_let:              /mortgages/buy-to-let/{ltv}-ltv/      -> 60, 75, 80
+The coordinator rounds the computed LTV up to the smallest available band that
+still covers the requested loan, falling back to the highest band if the LTV
+exceeds the available range.
+================================================================================
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+import aiohttp
+import async_timeout
+from bs4 import BeautifulSoup
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+
+from .const import (
+    CONF_MORTGAGE_AMOUNT,
+    CONF_PROPERTY_VALUE,
+    CONF_PURPOSE,
+    CONF_TERM,
+    DOMAIN,
+    PURPOSE_BTL,
+    PURPOSE_FTB,
+    PURPOSE_HOME_MOVER,
+    PURPOSE_REMORTGAGE,
+    REQUEST_TIMEOUT_SECONDS,
+    UPDATE_INTERVAL_SECONDS,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+# LTV bands discovered during the validation spike for each purpose.
+_LTV_BANDS: dict[str, list[int]] = {
+    PURPOSE_REMORTGAGE: [60, 75, 80],
+    PURPOSE_FTB: [85, 90, 95, 100],
+    PURPOSE_HOME_MOVER: [60, 75, 80, 85, 90, 95],
+    PURPOSE_BTL: [60, 75, 80],
+}
+
+# URL path templates for each purpose. {ltv} is an integer like 60.
+_URL_TEMPLATES: dict[str, str] = {
+    PURPOSE_REMORTGAGE: "https://moneyfactscompare.co.uk/mortgages/remortgage/{ltv}-ltv/",
+    PURPOSE_FTB: "https://moneyfactscompare.co.uk/mortgages/first-time-buyer-mortgages/{ltv}-ltv/",
+    PURPOSE_HOME_MOVER: "https://moneyfactscompare.co.uk/mortgages/{ltv}-ltv-mortgages/",
+    PURPOSE_BTL: "https://moneyfactscompare.co.uk/mortgages/buy-to-let/{ltv}-ltv/",
+}
+
+# Mobile/desktop browsers accept HTML; keep the request simple and cache-friendly.
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/126.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-GB,en;q=0.5",
+}
+
+
+class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+    """Coordinator that fetches and parses the best mortgage rate each day."""
+
+    def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
+        """Initialize the coordinator."""
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=f"{DOMAIN}_{config_entry.entry_id}",
+            update_interval=timedelta(seconds=UPDATE_INTERVAL_SECONDS),
+            always_update=True,
+        )
+        self._config = dict(config_entry.data)
+        self._term = self._config.get(CONF_TERM, 25)
+        self._session: aiohttp.ClientSession | None = None
+
+    async def _async_setup(self) -> None:
+        """Set up the shared aiohttp session.
+
+        IMPORTANT: Home Assistant's shared client session is used instead of
+        creating a new aiohttp.ClientSession. This respects HA connection
+        pooling and SSL configuration.
+        """
+        if self._session is None:
+            self._session = async_get_clientsession(self.hass)
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        """Fetch the comparison page and return the best available product."""
+        await self._async_setup()
+        if self._session is None:
+            raise UpdateFailed("shared aiohttp session is not available")
+
+        url = self._build_url()
+        _LOGGER.debug("Fetching mortgage rates from %s", url)
+
+        try:
+            async with async_timeout.timeout(REQUEST_TIMEOUT_SECONDS):
+                response = await self._session.get(url, headers=_HEADERS, raise_for_status=True)
+                html = await response.text()
+        except aiohttp.ClientError as err:
+            raise UpdateFailed(f"error fetching mortgage rates: {err}") from err
+        except asyncio.TimeoutError as err:
+            raise UpdateFailed("timeout fetching mortgage rates") from err
+
+        return self._parse_html(html)
+
+    def _build_url(self) -> str:
+        """Build the moneyfactscompare URL from configured purpose and LTV."""
+        purpose = self._config.get(CONF_PURPOSE, PURPOSE_REMORTGAGE)
+        template = _URL_TEMPLATES.get(purpose, _URL_TEMPLATES[PURPOSE_REMORTGAGE])
+
+        property_value = self._config.get(CONF_PROPERTY_VALUE, 0)
+        mortgage_amount = self._config.get(CONF_MORTGAGE_AMOUNT, 0)
+
+        ltv = 60
+        if property_value and mortgage_amount:
+            ltv = int(round((mortgage_amount / property_value) * 100))
+            ltv = max(ltv, 1)
+
+        band = self._nearest_ltv_band(purpose, ltv)
+        return template.format(ltv=band)
+
+    def _nearest_ltv_band(self, purpose: str, ltv: int) -> int:
+        """Return the smallest supported band >= ltv, or the max band if none."""
+        bands = _LTV_BANDS.get(purpose, _LTV_BANDS[PURPOSE_REMORTGAGE])
+        for band in bands:
+            if band >= ltv:
+                return band
+        return bands[-1]
+
+    def _parse_html(self, html: str) -> dict[str, Any]:
+        """Parse the server-rendered HTML and return the best product."""
+        soup = BeautifulSoup(html, "html.parser")
+        rows = soup.select("li.mortgages-table-item.table-item")
+
+        if not rows:
+            raise UpdateFailed("no rates found")
+
+        products: list[dict[str, Any]] = []
+        for row in rows:
+            product = self._extract_product(row)
+            if product.get("best_rate") is not None:
+                products.append(product)
+
+        if not products:
+            raise UpdateFailed("no rates found")
+
+        best = min(products, key=lambda p: p["best_rate"])
+
+        return {
+            "best_rate": best["best_rate"],
+            "lender": best["lender"],
+            "aprc": best["aprc"],
+            "product_fees": best["product_fees"],
+            "rate_type": best["rate_type"],
+            "initial_term_years": best["initial_term_years"],
+            "max_ltv": best["max_ltv"],
+            "monthly_payment": best["monthly_payment"],
+            "last_updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+
+    def _extract_product(self, row: BeautifulSoup) -> dict[str, Any]:
+        """Extract a single product's fields from a table row."""
+        lender_el = row.select_one(".table-item-heading-product-name strong")
+        rate_el = row.select_one(".table-item-cell .table-item-cell-value strong")
+        aprc_el = row.select_one(".table-item-cell.aprc .table-item-cell-value strong")
+        ltv_el = row.select_one(".table-item-cell.max-ltv-small .table-item-cell-value strong")
+        fees_el = row.select_one(".table-item-cell.product-fees .table-item-cell-value strong")
+        payment_el = row.select_one(
+            ".table-item-cell.initial-monthly-payment .table-item-cell-value strong"
+        )
+        desc_el = row.select_one(".table-item-cell .table-item-cell-value .small")
+
+        description = desc_el.get_text(strip=True) if desc_el else ""
+
+        lender = lender_el.get_text(strip=True) if lender_el else None
+        best_rate = self._parse_rate(rate_el.get_text(strip=True) if rate_el else "")
+        aprc = self._parse_rate(aprc_el.get_text(strip=True) if aprc_el else "")
+        max_ltv = self._parse_percentage_int(ltv_el.get_text(strip=True) if ltv_el else "")
+        product_fees = self._parse_money(fees_el.get_text(strip=True) if fees_el else "")
+        monthly_payment = self._parse_money(payment_el.get_text(strip=True) if payment_el else "")
+        rate_type = self._parse_rate_type(description)
+        initial_term_years = self._parse_initial_term(description)
+
+        return {
+            "lender": lender,
+            "best_rate": best_rate,
+            "aprc": aprc,
+            "product_fees": product_fees,
+            "monthly_payment": monthly_payment,
+            "rate_type": rate_type,
+            "initial_term_years": initial_term_years,
+            "max_ltv": max_ltv,
+        }
+
+    @staticmethod
+    def _parse_rate(text: str) -> float | None:
+        """Strip '%' and convert to float."""
+        text = text.replace("%", "").strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _parse_percentage_int(text: str) -> int | None:
+        """Strip '%' and convert to int."""
+        text = text.replace("%", "").strip()
+        if not text:
+            return None
+        try:
+            return int(float(text))
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _parse_money(text: str) -> float | None:
+        """Strip '£' / commas and convert to float."""
+        text = text.replace("£", "").replace(",", "").strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _parse_rate_type(description: str) -> str | None:
+        """Extract Fixed / Variable / Tracker from the product description."""
+        match = re.search(r"(Fixed|Variable|Tracker)", description, re.IGNORECASE)
+        if match:
+            return match.group(1).title()
+        return None
+
+    @staticmethod
+    def _parse_initial_term(description: str) -> int | None:
+        """Extract the initial term in years from the product description."""
+        match = re.search(r"for\s+(\d+)\s+year", description, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+        return None
