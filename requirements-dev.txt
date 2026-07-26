@@ -1,0 +1,5 @@
+pytest>=8.0
+pytest-homeassistant
+pytest-asyncio
+beautifulsoup4>=4.12
+aiohttp>=3.9

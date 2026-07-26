@@ -1,0 +1,12 @@
+{
+  "domain": "ha_mortgage_rates",
+  "name": "UK Mortgage Rates",
+  "version": "0.1.0",
+  "config_flow": true,
+  "documentation": "https://github.com/stosgale/ha-mortgage-rates",
+  "issue_tracker": "https://github.com/stosgale/ha-mortgage-rates/issues",
+  "codeowners": ["@stosgale"],
+  "requirements": ["aiohttp>=3.9", "beautifulsoup4>=4.12"],
+  "iot_class": "cloud_polling",
+  "integration_type": "service"
+}
