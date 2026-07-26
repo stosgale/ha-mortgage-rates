@@ -38,6 +38,7 @@ class _FieldMeta:
     unit: str | None
     state_class: SensorStateClass | None
     icon: str
+    precision: int | None = None
 
 
 # Field definitions for each (rate_type, term) group.
@@ -47,18 +48,21 @@ _FIELD_METAS: tuple[_FieldMeta, ...] = (
         unit="%",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:percent",
+        precision=2,
     ),
     _FieldMeta(
         field="lender",
         unit=None,
         state_class=None,
         icon="mdi:bank",
+        precision=None,
     ),
     _FieldMeta(
         field="monthly_payment",
         unit="GBP",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:cash",
+        precision=2,
     ),
 )
 
@@ -88,7 +92,6 @@ class MortgageRateSensor(CoordinatorEntity, SensorEntity):
     """Representation of one field of a mortgage rate group."""
 
     _attr_has_entity_name = True
-    _attr_suggested_display_precision = 2
 
     def __init__(
         self,
@@ -106,6 +109,8 @@ class MortgageRateSensor(CoordinatorEntity, SensorEntity):
         self._attr_native_unit_of_measurement = meta.unit
         self._attr_state_class = meta.state_class
         self._attr_icon = meta.icon
+        if meta.precision is not None:
+            self._attr_suggested_display_precision = meta.precision
 
     @property
     def native_value(self) -> Any | None:
