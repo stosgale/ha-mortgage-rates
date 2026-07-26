@@ -1,6 +1,6 @@
 # UK Mortgage Rates
 
-A Home Assistant custom integration that fetches the best current UK mortgage rates for your scenario from Moneyfacts. Define your property value, mortgage amount, term, and repayment type via the UI config flow, and the integration surfaces the lowest available rate as a sensor.
+A Home Assistant custom integration that scrapes the best current UK mortgage rates from [moneyfactscompare.co.uk](https://moneyfactscompare.co.uk) once daily and surfaces the lowest available rate for your scenario as a sensor. Define your property value, mortgage amount, purpose, and term through the UI config flow, and the integration handles the rest.
 
 [![Add to HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=stosgale&repository=ha-mortgage-rates&category=integration)
 
@@ -14,7 +14,7 @@ A Home Assistant custom integration that fetches the best current UK mortgage ra
 
 ### Manual
 
-Copy the `custom_components/mortgage_rates` directory from this repository into `<config>/custom_components/mortgage_rates/` on your Home Assistant instance, then restart.
+Copy the `custom_components/ha_mortgage_rates/` directory from the `stosgale/ha-mortgage-rates` repository into `<config>/custom_components/ha_mortgage_rates/` on your Home Assistant instance, then restart.
 
 ## Configuration
 
@@ -26,13 +26,14 @@ The integration is configured entirely through the Home Assistant UI.
 
    | Field | Description |
    |-------|-------------|
-   | Property value | The purchase price or estimated value of the property (GBP). |
-   | Mortgage amount | How much you need to borrow (GBP). |
-   | Purpose | Moving home, remortgaging, or a first-time buyer. |
-   | Mortgage term | Loan length in years (e.g. 25). |
-   | Repayment type | Capital repayment or interest-only. |
+   | Property Value | The purchase price or estimated value of the property (GBP). |
+   | Mortgage Amount | How much you need to borrow (GBP). |
+   | Purpose | One of: Remortgage, First Time Buyer, Home Mover, Buy to Let. |
+   | Term | Loan length in years (default 25). |
 
-After setup, a set of sensors is created with a title you choose during the flow.
+   The loan-to-value (LTV) ratio is computed automatically from your Property Value and Mortgage Amount.
+
+After setup, a sensor is created with a title you choose during the flow. You can add multiple config entries to track different scenarios (e.g. compare a remortgage against a new purchase).
 
 ## Entities
 
@@ -43,6 +44,15 @@ After setup, a set of sensors is created with a title you choose during the flow
 ## Data source
 
 Rate data is sourced from **moneyfactscompare.co.uk** and refreshed once per day. The data is provided for informational purposes only and does not constitute financial advice.
+
+## Limitations (v1)
+
+This is a first release with the following known limitations:
+
+- **First page only.** The integration only sees the first page of Moneyfacts results (roughly 20-50 products). More products will be available in a future release.
+- **Best rate = lowest initial rate.** Products are ranked by their initial interest rate, not by total cost over the term. A product with a lower rate but higher fees may rank above a product with a higher rate but lower overall cost.
+- **No built-in alerts.** There is no native notification system for rate changes. Use Home Assistant automations to send alerts when the rate drops below a threshold or the lender/product changes.
+- **Data quality depends on Moneyfacts.** All rate and product information is provided as-is from moneyfactscompare.co.uk. Verify details directly with lenders before making any financial decision.
 
 ## License
 
