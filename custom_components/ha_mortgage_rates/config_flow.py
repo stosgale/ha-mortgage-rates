@@ -1,0 +1,92 @@
+"""Config flow for UK Mortgage Rates integration."""
+from __future__ import annotations
+
+import voluptuous as vol
+
+from homeassistant.config_entries import ConfigFlow, FlowResult
+from homeassistant.helpers import selector
+
+from .const import (
+    CONF_MORTGAGE_AMOUNT,
+    CONF_PROPERTY_VALUE,
+    CONF_PURPOSE,
+    CONF_TERM,
+    DEFAULT_TERM,
+    DOMAIN,
+    PURPOSES,
+)
+
+PURPOSE_LABELS = {
+    "remortgage": "Remortgage",
+    "first_time_buyer": "First Time Buyer",
+    "home_mover": "Home Mover",
+    "buy_to_let": "Buy to Let",
+}
+
+
+class MortgageRatesConfigFlow(ConfigFlow, domain=DOMAIN):
+    """Handle a config flow for UK Mortgage Rates."""
+
+    VERSION = 1
+    MINOR_VERSION = 1
+
+    async def async_step_user(
+        self, user_input: dict | None = None
+    ) -> FlowResult:
+        """Handle the initial step."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            property_value = user_input[CONF_PROPERTY_VALUE]
+            mortgage_amount = user_input[CONF_MORTGAGE_AMOUNT]
+            purpose = user_input[CONF_PURPOSE]
+            term = user_input.get(CONF_TERM, DEFAULT_TERM)
+
+            if property_value <= 0:
+                errors[CONF_PROPERTY_VALUE] = "invalid_value"
+            elif mortgage_amount <= 0:
+                errors[CONF_MORTGAGE_AMOUNT] = "invalid_value"
+            elif mortgage_amount >= property_value:
+                errors[CONF_MORTGAGE_AMOUNT] = "invalid_amount"
+            elif term < 1 or term > 40:
+                errors[CONF_TERM] = "invalid_value"
+
+            if not errors:
+                ltv = int(mortgage_amount / property_value * 100)
+                unique_id = f"{purpose}_{ltv}_{term or DEFAULT_TERM}"
+
+                await self.async_set_unique_id(unique_id)
+                self._abort_if_unique_id_configured()
+
+                purpose_label = PURPOSE_LABELS.get(purpose, purpose)
+                title = f"{purpose_label} ({ltv}% LTV, {term}yr)"
+
+                return self.async_create_entry(
+                    title=title,
+                    data=user_input,
+                )
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_PROPERTY_VALUE): vol.Coerce(int),
+                    vol.Required(CONF_MORTGAGE_AMOUNT): vol.Coerce(int),
+                    vol.Required(CONF_PURPOSE): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                selector.SelectOption(
+                                    value=p, label=PURPOSE_LABELS[p]
+                                )
+                                for p in PURPOSES
+                            ],
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
+                    vol.Optional(CONF_TERM, default=DEFAULT_TERM): vol.Coerce(
+                        int
+                    ),
+                }
+            ),
+            errors=errors,
+        )

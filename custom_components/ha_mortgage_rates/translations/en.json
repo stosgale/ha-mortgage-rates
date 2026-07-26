@@ -1,0 +1,30 @@
+{
+  "title": "UK Mortgage Rates",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Mortgage Scenario",
+        "description": "Enter your mortgage details to find the best available rate.",
+        "data": {
+          "property_value": "Property Value (£)",
+          "mortgage_amount": "Mortgage Amount (£)",
+          "purpose": "Purpose",
+          "term": "Term (years)"
+        },
+        "data_description": {
+          "property_value": "The total value of the property.",
+          "mortgage_amount": "The amount you want to borrow.",
+          "purpose": "Remortgage, first-time buyer, home mover, or buy-to-let.",
+          "term": "Mortgage term in years (default: 25)."
+        }
+      }
+    },
+    "error": {
+      "invalid_amount": "Mortgage amount must be less than property value.",
+      "invalid_value": "Property value must be greater than 0."
+    },
+    "abort": {
+      "already_configured": "This mortgage scenario is already configured."
+    }
+  }
+}
