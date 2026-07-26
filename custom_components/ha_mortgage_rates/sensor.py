@@ -57,7 +57,7 @@ _FIELD_METAS: tuple[_FieldMeta, ...] = (
     _FieldMeta(
         field="monthly_payment",
         unit="GBP",
-        state_class=SensorStateClass.TOTAL,
+        state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:cash",
     ),
 )
