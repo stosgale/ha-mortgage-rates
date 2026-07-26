@@ -104,6 +104,7 @@ class MortgageRateSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._group_key = group_key
         self._meta = meta
+        self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_{group_key}_{meta.field}"
         self._attr_name = _display_name(group_key, meta.field)
         self._attr_native_unit_of_measurement = meta.unit
@@ -132,6 +133,8 @@ class MortgageRateSensor(CoordinatorEntity, SensorEntity):
         if isinstance(group, dict):
             attrs.update(group)
         attrs["last_updated"] = data.get("last_updated")
+        attrs["_config_mortgage_amount"] = self._entry.data.get("mortgage_amount")
+        attrs["_config_term"] = self._entry.data.get("term")
         return attrs
 
 

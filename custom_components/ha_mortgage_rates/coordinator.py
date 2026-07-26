@@ -231,8 +231,46 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             key: min(products, key=lambda p: p["rate"])
             for key, products in groups.items()
         }
+
+        # Overwrite the website's default monthly payment with one calculated
+        # from the user's configured mortgage amount and term.
+        mortgage_amount = self._config.get(CONF_MORTGAGE_AMOUNT, 0)
+        term_years = self._config.get(CONF_TERM, 25)
+        _LOGGER.info(
+            "Calculating monthly payments: mortgage_amount=%s, term=%s years, config=%s",
+            mortgage_amount, term_years, self._config,
+        )
+        for key, product in result.items():
+            rate = product.get("rate")
+            if rate is not None and mortgage_amount > 0:
+                calc = self._calc_monthly_payment(rate, mortgage_amount, term_years)
+                _LOGGER.info(
+                    "%s: rate=%.2f%% -> scraped=£%s, calculated=£%.2f",
+                    key, rate, product.get("monthly_payment"), calc,
+                )
+                product["monthly_payment"] = calc
+
         result["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         return result
+
+    @staticmethod
+    def _calc_monthly_payment(rate: float, mortgage_amount: float, term_years: int) -> float:
+        """Calculate monthly repayment using the standard amortisation formula.
+
+        M = P * r * (1+r)^n / ((1+r)^n - 1)
+
+        Where:
+            P = mortgage_amount
+            r = monthly rate = (rate / 100) / 12
+            n = total months = term_years * 12
+        """
+        r = (rate / 100) / 12
+        n = term_years * 12
+        if n == 0:
+            return 0.0
+        if r == 0:
+            return round(mortgage_amount / n, 2)
+        return round(mortgage_amount * r * (1 + r) ** n / ((1 + r) ** n - 1), 2)
 
     def _extract_product(self, row: BeautifulSoup) -> dict[str, Any]:
         """Extract a single product's fields from a table row."""
