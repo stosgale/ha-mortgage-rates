@@ -1,12 +1,23 @@
-"""Sensor platform for ha_mortgage_rates."""
+"""Sensor platform for ha_mortgage_rates.
 
-from collections.abc import Callable
+This platform creates a set of sensors for every (rate_type, term) group
+returned by the coordinator.  Each group gets three sensors:
+
+- ``{group_key}_rate``            – the cheapest initial rate (percentage)
+- ``{group_key}_lender``          – the lender offering that product
+- ``{group_key}_monthly_payment`` – the initial monthly payment (GBP)
+
+Sensor entity names follow the pattern "<Type> <Term>yr <Field>", e.g.
+"Fixed 2yr Rate" or "Variable Unknown Term Lender".
+"""
+
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.components.sensor import (
     SensorEntity,
-    SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
@@ -20,61 +31,103 @@ PARALLEL_UPDATES = 0
 
 
 @dataclass(frozen=True, kw_only=True)
-class MortgageRateSensorEntityDescription(SensorEntityDescription):
-    """Describes a mortgage rate sensor."""
+class _FieldMeta:
+    """Metadata describing one of the per-group sensor fields."""
 
-    value_fn: Callable[[dict[str, Any]], Any | None] = lambda data: None
+    field: str
+    unit: str | None
+    state_class: SensorStateClass | None
+    icon: str
 
 
-SENSOR_DESCRIPTIONS: list[MortgageRateSensorEntityDescription] = [
-    MortgageRateSensorEntityDescription(
-        key="best_rate",
-        native_unit_of_measurement="%",
+# Field definitions for each (rate_type, term) group.
+_FIELD_METAS: tuple[_FieldMeta, ...] = (
+    _FieldMeta(
+        field="rate",
+        unit="%",
         state_class=SensorStateClass.MEASUREMENT,
-        device_class=None,
-        suggested_display_precision=2,
-        value_fn=lambda data: data.get("best_rate"),
+        icon="mdi:percent",
     ),
-]
+    _FieldMeta(
+        field="lender",
+        unit=None,
+        state_class=None,
+        icon="mdi:bank",
+    ),
+    _FieldMeta(
+        field="monthly_payment",
+        unit="GBP",
+        state_class=SensorStateClass.TOTAL,
+        icon="mdi:cash",
+    ),
+)
+
+
+def _display_name(group_key: str, field: str) -> str:
+    """Return a human-readable entity name suffix for a group/field pair.
+
+    Examples:
+      - ``fixed_2yr`` + ``rate``            -> ``Fixed 2yr Rate``
+      - ``variable_unknown_term`` + ``lender`` -> ``Variable Unknown Term Lender``
+      - ``unknown_type_5yr`` + ``monthly_payment`` -> ``Unknown Type 5yr Monthly Payment``
+    """
+    parts = group_key.split("_")
+    # The last part is the term token (e.g. "2yr" or "unknown-term").
+    # Everything before it is the rate type.
+    term_token = parts[-1].replace("-", " ").replace("_", " ")
+    type_parts = parts[:-1]
+
+    type_name = " ".join(part.capitalize() for part in type_parts) if type_parts else "Unknown"
+    field_name = " ".join(part.capitalize() for part in field.split("_"))
+    term_token = " ".join(part.capitalize() for part in term_token.split())
+
+    return f"{type_name} {term_token} {field_name}"
 
 
 class MortgageRateSensor(CoordinatorEntity, SensorEntity):
-    """Representation of a mortgage rate sensor."""
+    """Representation of one field of a mortgage rate group."""
 
-    entity_description: MortgageRateSensorEntityDescription
-    _attr_icon = "mdi:percent"
+    _attr_has_entity_name = True
+    _attr_suggested_display_precision = 2
 
     def __init__(
         self,
         coordinator: DataUpdateCoordinator[dict[str, Any]],
-        description: MortgageRateSensorEntityDescription,
         entry: ConfigEntry,
+        group_key: str,
+        meta: _FieldMeta,
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
-        self.entity_description = description
-        self._attr_has_entity_name = True
-        self._attr_unique_id = f"{entry.entry_id}_best_rate"
+        self._group_key = group_key
+        self._meta = meta
+        self._attr_unique_id = f"{entry.entry_id}_{group_key}_{meta.field}"
+        self._attr_name = _display_name(group_key, meta.field)
+        self._attr_native_unit_of_measurement = meta.unit
+        self._attr_state_class = meta.state_class
+        self._attr_icon = meta.icon
 
     @property
     def native_value(self) -> Any | None:
         """Return the native value of the sensor."""
-        return self.entity_description.value_fn(self.coordinator.data)
+        data = self.coordinator.data
+        if not data:
+            return None
+        group = data.get(self._group_key)
+        if not isinstance(group, dict):
+            return None
+        return group.get(self._meta.field)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return extra state attributes."""
+        """Return the group's full product data plus the top-level timestamp."""
         data = self.coordinator.data or {}
-        return {
-            "lender": data.get("lender"),
-            "aprc": data.get("aprc"),
-            "product_fees": data.get("product_fees"),
-            "rate_type": data.get("rate_type"),
-            "initial_term_years": data.get("initial_term_years"),
-            "max_ltv": data.get("max_ltv"),
-            "monthly_payment": data.get("monthly_payment"),
-            "last_updated": data.get("last_updated"),
-        }
+        group = data.get(self._group_key)
+        attrs: dict[str, Any] = {}
+        if isinstance(group, dict):
+            attrs.update(group)
+        attrs["last_updated"] = data.get("last_updated")
+        return attrs
 
 
 async def async_setup_entry(
@@ -82,8 +135,14 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up sensor platform."""
+    """Set up sensor platform for a config entry."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        [MortgageRateSensor(coordinator, SENSOR_DESCRIPTIONS[0], entry)]
-    )
+    entities: list[SensorEntity] = []
+
+    for group_key in coordinator.data:
+        if group_key == "last_updated":
+            continue
+        for meta in _FIELD_METAS:
+            entities.append(MortgageRateSensor(coordinator, entry, group_key, meta))
+
+    async_add_entities(entities)

@@ -36,7 +36,7 @@ LTV filtering: URL-based, not client-side JS. Each purpose exposes LTV-specific
 URLs. Confirmed available bands (manual curl probe):
   - remortgage:              /mortgages/remortgage/{ltv}-ltv/      -> 60, 75, 80
   - first_time_buyer:        /mortgages/first-time-buyer-mortgages/{ltv}-ltv/
-                                                                  -> 85, 90, 95, 100
+                                                                   -> 85, 90, 95, 100
   - home_mover:              /mortgages/{ltv}-ltv-mortgages/       -> 60, 75, 80, 85, 90, 95
   - buy_to_let:              /mortgages/buy-to-let/{ltv}-ltv/      -> 60, 75, 80
 The coordinator rounds the computed LTV up to the smallest available band that
@@ -49,6 +49,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -108,8 +109,23 @@ _HEADERS = {
 }
 
 
+def _group_key(rate_type: str | None, term: int | None) -> str:
+    """Build a deterministic key for a (rate_type, initial_term) pair.
+
+    The key is used by the coordinator and sensor platform to identify the
+    cheapest product for a given product category.
+    """
+    rate_part = (rate_type or "unknown_type").lower()
+    term_part = f"{term}yr" if term is not None else "unknown_term"
+    return f"{rate_part}_{term_part}"
+
+
 class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Coordinator that fetches and parses the best mortgage rate each day."""
+    """Coordinator that fetches and parses mortgage rates each day.
+
+    The coordinator returns a dictionary keyed by (rate_type, term) groups.
+    Each group contains the cheapest product for that category.
+    """
 
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
         """Initialize the coordinator."""
@@ -135,7 +151,7 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._session = async_get_clientsession(self.hass)
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Fetch the comparison page and return the best available product."""
+        """Fetch the comparison page and return grouped products."""
         await self._async_setup()
         if self._session is None:
             raise UpdateFailed("shared aiohttp session is not available")
@@ -179,35 +195,44 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return bands[-1]
 
     def _parse_html(self, html: str) -> dict[str, Any]:
-        """Parse the server-rendered HTML and return the best product."""
+        """Parse the server-rendered HTML and group products by (rate_type, term).
+
+        Returns a dictionary whose keys are ``{rate_type}_{term}yr`` (e.g.
+        ``fixed_2yr``, ``variable_2yr``). The special key ``last_updated`` holds
+        the UTC timestamp of the update.  Each group value is the cheapest
+        product for that group, with the following keys:
+
+        - rate
+        - lender
+        - monthly_payment
+        - aprc
+        - product_fees
+        - rate_type
+        - initial_term_years
+        - max_ltv
+        """
         soup = BeautifulSoup(html, "html.parser")
         rows = soup.select("li.mortgages-table-item.table-item")
 
         if not rows:
             raise UpdateFailed("no rates found")
 
-        products: list[dict[str, Any]] = []
+        groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in rows:
             product = self._extract_product(row)
-            if product.get("best_rate") is not None:
-                products.append(product)
+            if product.get("rate") is not None:
+                key = _group_key(product.get("rate_type"), product.get("initial_term_years"))
+                groups[key].append(product)
 
-        if not products:
+        if not groups:
             raise UpdateFailed("no rates found")
 
-        best = min(products, key=lambda p: p["best_rate"])
-
-        return {
-            "best_rate": best["best_rate"],
-            "lender": best["lender"],
-            "aprc": best["aprc"],
-            "product_fees": best["product_fees"],
-            "rate_type": best["rate_type"],
-            "initial_term_years": best["initial_term_years"],
-            "max_ltv": best["max_ltv"],
-            "monthly_payment": best["monthly_payment"],
-            "last_updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        result: dict[str, Any] = {
+            key: min(products, key=lambda p: p["rate"])
+            for key, products in groups.items()
         }
+        result["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return result
 
     def _extract_product(self, row: BeautifulSoup) -> dict[str, Any]:
         """Extract a single product's fields from a table row."""
@@ -224,7 +249,7 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         description = desc_el.get_text(strip=True) if desc_el else ""
 
         lender = lender_el.get_text(strip=True) if lender_el else None
-        best_rate = self._parse_rate(rate_el.get_text(strip=True) if rate_el else "")
+        rate = self._parse_rate(rate_el.get_text(strip=True) if rate_el else "")
         aprc = self._parse_rate(aprc_el.get_text(strip=True) if aprc_el else "")
         max_ltv = self._parse_percentage_int(ltv_el.get_text(strip=True) if ltv_el else "")
         product_fees = self._parse_money(fees_el.get_text(strip=True) if fees_el else "")
@@ -234,7 +259,7 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return {
             "lender": lender,
-            "best_rate": best_rate,
+            "rate": rate,
             "aprc": aprc,
             "product_fees": product_fees,
             "monthly_payment": monthly_payment,

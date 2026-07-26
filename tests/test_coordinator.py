@@ -24,6 +24,7 @@ from custom_components.ha_mortgage_rates.const import (
 )
 from custom_components.ha_mortgage_rates.coordinator import (
     MortgageRatesCoordinator,
+    _group_key,
 )
 
 
@@ -108,6 +109,25 @@ def test_build_url_ltv_above_max(hass: HomeAssistant) -> None:
 
 
 # -----------------------------------------------------------------------------
+# Group key helper
+# -----------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("rate_type", "term", "expected_key"),
+    [
+        ("Fixed", 2, "fixed_2yr"),
+        ("Variable", 2, "variable_2yr"),
+        ("Fixed", 5, "fixed_5yr"),
+        ("Variable", None, "variable_unknown_term"),
+        (None, 2, "unknown_type_2yr"),
+        (None, None, "unknown_type_unknown_term"),
+    ],
+)
+def test_group_key(rate_type: str | None, term: int | None, expected_key: str) -> None:
+    """Test the deterministic group key generation."""
+    assert _group_key(rate_type, term) == expected_key
+
+
+# -----------------------------------------------------------------------------
 # Static parsing helpers
 # -----------------------------------------------------------------------------
 @pytest.mark.parametrize(
@@ -170,34 +190,55 @@ def test_parse_initial_term(description: str, expected: int | None) -> None:
 # HTML parsing with the real fixture
 # -----------------------------------------------------------------------------
 def test_parse_html_with_fixture(hass: HomeAssistant, fixture_html: str) -> None:
-    """Test parsing the real fixture returns at least 5 products with valid fields."""
+    """Test parsing the real fixture returns grouped products and a timestamp."""
     coord = coordinator(hass, {})
     result = coord._parse_html(fixture_html)
 
-    assert isinstance(result["best_rate"], float)
-    assert result["best_rate"] > 0
-    assert isinstance(result["lender"], str)
-    assert result["lender"]
-    assert result["rate_type"] in ("Fixed", "Variable", "Tracker", None)
-    assert isinstance(result["initial_term_years"], int) or result["initial_term_years"] is None
+    assert isinstance(result, dict)
+    assert "last_updated" in result
+    # The fixture contains several (rate_type, term) combinations.
+    assert len(result) > 1
+
+    for key, group in result.items():
+        if key == "last_updated":
+            continue
+        assert isinstance(key, str)
+        assert "_" in key
+        assert isinstance(group, dict)
+        assert isinstance(group["rate"], float)
+        assert group["rate"] > 0
+        assert isinstance(group["lender"], str)
+        assert group["lender"]
+        assert group["rate_type"] in ("Fixed", "Variable", "Tracker", None)
+        assert isinstance(group["initial_term_years"], int) or group["initial_term_years"] is None
+        assert "monthly_payment" in group
+        assert "aprc" in group
+        assert "product_fees" in group
+        assert "max_ltv" in group
 
 
-def test_parse_html_best_rate_lowest(hass: HomeAssistant, fixture_html: str) -> None:
-    """Test that the returned best_rate is the minimum across all products."""
+def test_parse_html_groups_by_rate_type_and_term(hass: HomeAssistant, fixture_html: str) -> None:
+    """Test that products are grouped by (rate_type, term) and the cheapest rate is kept."""
     from bs4 import BeautifulSoup
 
     coord = coordinator(hass, {})
+    result = coord._parse_html(fixture_html)
+
+    # Extract all products manually to verify group minima.
     soup = BeautifulSoup(fixture_html, "html.parser")
     rows = soup.select("li.mortgages-table-item.table-item")
 
-    extracted_rates = []
+    products_by_group: dict[str, list[float]] = {}
     for row in rows:
         product = coord._extract_product(row)
-        if product["best_rate"] is not None:
-            extracted_rates.append(product["best_rate"])
+        if product["rate"] is None:
+            continue
+        key = _group_key(product["rate_type"], product["initial_term_years"])
+        products_by_group.setdefault(key, []).append(product["rate"])
 
-    result = coord._parse_html(fixture_html)
-    assert result["best_rate"] == pytest.approx(min(extracted_rates))
+    for key, rates in products_by_group.items():
+        assert key in result
+        assert result[key]["rate"] == pytest.approx(min(rates))
 
 
 def test_parse_html_empty(hass: HomeAssistant) -> None:
@@ -234,7 +275,7 @@ async def mock_session(fixture_html: str) -> AsyncMock:
 async def test_async_update_data_success(
     hass: HomeAssistant, mock_session: AsyncMock
 ) -> None:
-    """Test that async_update_data returns the expected dict on HTTP success."""
+    """Test that async_update_data returns grouped product data on HTTP success."""
     coord = coordinator(
         hass,
         {
@@ -249,15 +290,22 @@ async def test_async_update_data_success(
     result = await coord._async_update_data()
 
     assert isinstance(result, dict)
-    assert "best_rate" in result
-    assert "lender" in result
-    assert "aprc" in result
-    assert "product_fees" in result
-    assert "rate_type" in result
-    assert "initial_term_years" in result
-    assert "max_ltv" in result
-    assert "monthly_payment" in result
     assert "last_updated" in result
+    # The single best-rate key is gone; groups are present instead.
+    assert "best_rate" not in result
+    assert any(key != "last_updated" for key in result)
+
+    for key, group in result.items():
+        if key == "last_updated":
+            continue
+        assert "rate" in group
+        assert "lender" in group
+        assert "monthly_payment" in group
+        assert "aprc" in group
+        assert "product_fees" in group
+        assert "rate_type" in group
+        assert "initial_term_years" in group
+        assert "max_ltv" in group
 
     mock_session.get.assert_awaited_once()
 

@@ -1,9 +1,11 @@
-"""Tests for the HA Mortgage Rates sensor."""
+"""Tests for the HA Mortgage Rates sensor platform."""
 
 from __future__ import annotations
 
 import sys
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Mock the entity_platform module before importing sensor.py so that
 # AddConfigEntryEntitiesCallback (added in HA 2025.x) is available
@@ -16,13 +18,17 @@ from homeassistant.components.sensor import SensorStateClass  # noqa: E402
 
 from custom_components.ha_mortgage_rates.sensor import (  # noqa: E402
     MortgageRateSensor,
-    SENSOR_DESCRIPTIONS,
+    _FIELD_METAS,
+    _display_name,
+    async_setup_entry,
 )
 
 
 def _make_sensor(
-    coordinator_data: dict | None = None,
+    coordinator_data: dict | None,
     entry_id: str = "abc123",
+    group_key: str = "fixed_2yr",
+    field: str = "rate",
 ) -> MortgageRateSensor:
     """Build a MortgageRateSensor with mocked coordinator and config entry."""
     coordinator = MagicMock()
@@ -31,166 +37,238 @@ def _make_sensor(
     entry = MagicMock()
     entry.entry_id = entry_id
 
-    return MortgageRateSensor(coordinator, SENSOR_DESCRIPTIONS[0], entry)
+    meta = next(m for m in _FIELD_METAS if m.field == field)
+    return MortgageRateSensor(coordinator, entry, group_key, meta)
 
 
 # ---------------------------------------------------------------------------
-# Test 1 — native_value
+# Display name helper
 # ---------------------------------------------------------------------------
-def test_sensor_state() -> None:
-    """Test sensor native_value matches best_rate from coordinator data."""
-    sensor = _make_sensor({"best_rate": 4.14})
-    assert sensor.native_value == 4.14
+@pytest.mark.parametrize(
+    ("group_key", "field", "expected"),
+    [
+        ("fixed_2yr", "rate", "Fixed 2yr Rate"),
+        ("fixed_2yr", "lender", "Fixed 2yr Lender"),
+        ("fixed_2yr", "monthly_payment", "Fixed 2yr Monthly Payment"),
+        ("variable_unknown_term", "rate", "Variable Unknown Term Rate"),
+        ("unknown_type_5yr", "lender", "Unknown Type 5yr Lender"),
+    ],
+)
+def test_display_name(group_key: str, field: str, expected: str) -> None:
+    """Test that display names are generated from group keys and fields."""
+    assert _display_name(group_key, field) == expected
 
 
 # ---------------------------------------------------------------------------
-# Test 2 — extra_state_attributes
+# Per-field sensor tests
 # ---------------------------------------------------------------------------
-def test_sensor_attributes() -> None:
-    """Test extra_state_attributes returns all 8 expected keys with correct values."""
+def test_rate_sensor_state() -> None:
+    """Test rate sensor native_value is the group's rate."""
     data = {
-        "best_rate": 4.14,
-        "lender": "Nationwide",
-        "aprc": 5.2,
-        "product_fees": 999.0,
-        "rate_type": "Fixed",
-        "initial_term_years": 5,
-        "max_ltv": 60,
-        "monthly_payment": 850.50,
+        "fixed_2yr": {
+            "rate": 4.47,
+            "lender": "Nationwide",
+            "monthly_payment": 1123.59,
+        },
         "last_updated": "2026-07-26T12:00:00Z",
     }
-    sensor = _make_sensor(data)
-    attrs = sensor.extra_state_attributes
+    sensor = _make_sensor(data, group_key="fixed_2yr", field="rate")
+    assert sensor.native_value == 4.47
 
-    assert attrs["lender"] == "Nationwide"
-    assert attrs["aprc"] == 5.2
-    assert attrs["product_fees"] == 999.0
-    assert attrs["rate_type"] == "Fixed"
-    assert attrs["initial_term_years"] == 5
-    assert attrs["max_ltv"] == 60
-    assert attrs["monthly_payment"] == 850.50
-    assert attrs["last_updated"] == "2026-07-26T12:00:00Z"
 
-    expected_keys = {
-        "lender",
-        "aprc",
-        "product_fees",
-        "rate_type",
-        "initial_term_years",
-        "max_ltv",
-        "monthly_payment",
-        "last_updated",
+def test_lender_sensor_state() -> None:
+    """Test lender sensor native_value is the group's lender."""
+    data = {
+        "fixed_2yr": {
+            "rate": 4.47,
+            "lender": "Nationwide",
+            "monthly_payment": 1123.59,
+        },
+        "last_updated": "2026-07-26T12:00:00Z",
     }
-    assert set(attrs.keys()) == expected_keys
+    sensor = _make_sensor(data, group_key="fixed_2yr", field="lender")
+    assert sensor.native_value == "Nationwide"
+
+
+def test_monthly_payment_sensor_state() -> None:
+    """Test monthly_payment sensor native_value is the group's payment."""
+    data = {
+        "fixed_2yr": {
+            "rate": 4.47,
+            "lender": "Nationwide",
+            "monthly_payment": 1123.59,
+        },
+        "last_updated": "2026-07-26T12:00:00Z",
+    }
+    sensor = _make_sensor(data, group_key="fixed_2yr", field="monthly_payment")
+    assert sensor.native_value == 1123.59
 
 
 # ---------------------------------------------------------------------------
-# Test 3 — native_unit_of_measurement
+# Sensor metadata
 # ---------------------------------------------------------------------------
-def test_sensor_native_unit_of_measurement() -> None:
-    """Test sensor unit of measurement is percent."""
-    sensor = _make_sensor({})
-    assert sensor.entity_description.native_unit_of_measurement == "%"
-
-
-# ---------------------------------------------------------------------------
-# Test 4 — state_class
-# ---------------------------------------------------------------------------
-def test_sensor_state_class() -> None:
-    """Test sensor state class is MEASUREMENT."""
-    sensor = _make_sensor({})
-    assert sensor.entity_description.state_class == SensorStateClass.MEASUREMENT
-
-
-# ---------------------------------------------------------------------------
-# Test 5 — unique_id
-# ---------------------------------------------------------------------------
-def test_sensor_unique_id() -> None:
-    """Test sensor unique_id follows entry.entry_id pattern."""
-    sensor = _make_sensor({}, entry_id="abc123")
-    assert sensor.unique_id == "abc123_best_rate"
-
-
-# ---------------------------------------------------------------------------
-# Test 6 — icon
-# ---------------------------------------------------------------------------
-def test_sensor_icon() -> None:
-    """Test sensor icon is mdi:percent."""
-    sensor = _make_sensor({})
+def test_rate_sensor_metadata() -> None:
+    """Test rate sensor has percent unit, MEASUREMENT state class and percent icon."""
+    sensor = _make_sensor({}, group_key="fixed_2yr", field="rate")
+    assert sensor.native_unit_of_measurement == "%"
+    assert sensor.state_class == SensorStateClass.MEASUREMENT
     assert sensor.icon == "mdi:percent"
 
 
+def test_lender_sensor_metadata() -> None:
+    """Test lender sensor has no unit, no state class and bank icon."""
+    sensor = _make_sensor({}, group_key="variable_2yr", field="lender")
+    assert sensor.native_unit_of_measurement is None
+    assert sensor.state_class is None
+    assert sensor.icon == "mdi:bank"
+
+
+def test_monthly_payment_sensor_metadata() -> None:
+    """Test monthly payment sensor has GBP unit, TOTAL state class and cash icon."""
+    sensor = _make_sensor({}, group_key="fixed_5yr", field="monthly_payment")
+    assert sensor.native_unit_of_measurement == "GBP"
+    assert sensor.state_class == SensorStateClass.TOTAL
+    assert sensor.icon == "mdi:cash"
+
+
 # ---------------------------------------------------------------------------
-# Test 7 — has_entity_name
+# Naming and identity
 # ---------------------------------------------------------------------------
+def test_sensor_unique_id() -> None:
+    """Test unique_id follows entry_id_group_key_field pattern."""
+    sensor = _make_sensor(
+        {}, entry_id="abc123", group_key="fixed_2yr", field="rate"
+    )
+    assert sensor.unique_id == "abc123_fixed_2yr_rate"
+
+
+def test_sensor_name() -> None:
+    """Test sensor name is a human-readable suffix for the group and field."""
+    sensor = _make_sensor({}, group_key="fixed_2yr", field="rate")
+    assert sensor.name == "Fixed 2yr Rate"
+
+
 def test_sensor_has_entity_name() -> None:
     """Test sensor has entity name enabled."""
-    sensor = _make_sensor({})
+    sensor = _make_sensor({}, group_key="fixed_2yr", field="rate")
     assert sensor.has_entity_name is True
 
 
-# ---------------------------------------------------------------------------
-# Test 8 — suggested_display_precision
-# ---------------------------------------------------------------------------
 def test_sensor_suggested_display_precision() -> None:
     """Test sensor suggested display precision is 2."""
-    sensor = _make_sensor({})
-    assert sensor.entity_description.suggested_display_precision == 2
+    sensor = _make_sensor({}, group_key="fixed_2yr", field="rate")
+    assert sensor.suggested_display_precision == 2
 
 
 # ---------------------------------------------------------------------------
-# Test 9 — unavailable / None best_rate
+# Attributes
 # ---------------------------------------------------------------------------
-def test_sensor_unavailable() -> None:
-    """Test sensor native_value is None when best_rate is None."""
-    sensor = _make_sensor({"best_rate": None, "lender": "Nationwide"})
+def test_sensor_extra_state_attributes() -> None:
+    """Test extra_state_attributes returns the group's full data plus last_updated."""
+    data = {
+        "fixed_2yr": {
+            "rate": 4.47,
+            "lender": "Nationwide",
+            "aprc": 6.3,
+            "product_fees": 999.0,
+            "rate_type": "Fixed",
+            "initial_term_years": 2,
+            "max_ltv": 60,
+            "monthly_payment": 1123.59,
+        },
+        "last_updated": "2026-07-26T12:00:00Z",
+    }
+    sensor = _make_sensor(data, group_key="fixed_2yr", field="rate")
+    attrs = sensor.extra_state_attributes
+
+    assert attrs["rate"] == 4.47
+    assert attrs["lender"] == "Nationwide"
+    assert attrs["aprc"] == 6.3
+    assert attrs["product_fees"] == 999.0
+    assert attrs["rate_type"] == "Fixed"
+    assert attrs["initial_term_years"] == 2
+    assert attrs["max_ltv"] == 60
+    assert attrs["monthly_payment"] == 1123.59
+    assert attrs["last_updated"] == "2026-07-26T12:00:00Z"
+
+
+def test_sensor_unavailable_when_group_missing() -> None:
+    """Test sensor native_value is None when its group is missing."""
+    sensor = _make_sensor({"last_updated": "2026-07-26T12:00:00Z"}, field="rate")
+    assert sensor.native_value is None
+
+
+def test_sensor_unavailable_when_coordinator_data_none() -> None:
+    """Test sensor native_value is None when coordinator data is None."""
+    sensor = _make_sensor(None, field="rate")
     assert sensor.native_value is None
 
 
 # ---------------------------------------------------------------------------
-# Test 10 — missing keys in coordinator data
-# ---------------------------------------------------------------------------
-def test_sensor_missing_attributes() -> None:
-    """Test extra_state_attributes returns None (not KeyError) for missing keys."""
-    # Empty dict — every key is missing
-    sensor = _make_sensor({})
-    attrs = sensor.extra_state_attributes
-    for key in (
-        "lender",
-        "aprc",
-        "product_fees",
-        "rate_type",
-        "initial_term_years",
-        "max_ltv",
-        "monthly_payment",
-        "last_updated",
-    ):
-        assert attrs[key] is None
-
-    # coordinator.data is None — the property falls back to {}
-    sensor_none = _make_sensor(None)
-    attrs_none = sensor_none.extra_state_attributes
-    for key in (
-        "lender",
-        "aprc",
-        "product_fees",
-        "rate_type",
-        "initial_term_years",
-        "max_ltv",
-        "monthly_payment",
-        "last_updated",
-    ):
-        assert attrs_none[key] is None
-
-
-# ---------------------------------------------------------------------------
-# Test 11 — multiple entries
+# Multiple config entries
 # ---------------------------------------------------------------------------
 def test_sensor_multiple_entries() -> None:
     """Test sensors from different config entries have different unique_ids."""
-    sensor_a = _make_sensor({}, entry_id="entry_a")
-    sensor_b = _make_sensor({}, entry_id="entry_b")
+    data = {
+        "fixed_2yr": {"rate": 4.47, "lender": "Nationwide", "monthly_payment": 1123.59},
+        "last_updated": "2026-07-26T12:00:00Z",
+    }
+    sensor_a = _make_sensor(data, entry_id="entry_a", group_key="fixed_2yr", field="rate")
+    sensor_b = _make_sensor(data, entry_id="entry_b", group_key="fixed_2yr", field="rate")
 
-    assert sensor_a.unique_id == "entry_a_best_rate"
-    assert sensor_b.unique_id == "entry_b_best_rate"
+    assert sensor_a.unique_id == "entry_a_fixed_2yr_rate"
+    assert sensor_b.unique_id == "entry_b_fixed_2yr_rate"
     assert sensor_a.unique_id != sensor_b.unique_id
+
+
+# ---------------------------------------------------------------------------
+# Platform setup
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_async_setup_entry_creates_three_sensors_per_group() -> None:
+    """Test async_setup_entry creates three sensors for each group in coordinator data."""
+    hass = MagicMock()
+    coordinator = MagicMock()
+    coordinator.data = {
+        "fixed_2yr": {
+            "rate": 4.47,
+            "lender": "Nationwide",
+            "monthly_payment": 1123.59,
+        },
+        "variable_2yr": {
+            "rate": 4.13,
+            "lender": "Nationwide BS",
+            "monthly_payment": 1123.59,
+        },
+        "last_updated": "2026-07-26T12:00:00Z",
+    }
+    hass.data = {"ha_mortgage_rates": {"entry-1": coordinator}}
+
+    entry = MagicMock()
+    entry.entry_id = "entry-1"
+
+    async_add_entities = MagicMock()
+    await async_setup_entry(hass, entry, async_add_entities)
+
+    entities = async_add_entities.call_args[0][0]
+    assert len(entities) == 6  # 2 groups x 3 fields
+
+    unique_ids = {e.unique_id for e in entities}
+    expected = {
+        "entry-1_fixed_2yr_rate",
+        "entry-1_fixed_2yr_lender",
+        "entry-1_fixed_2yr_monthly_payment",
+        "entry-1_variable_2yr_rate",
+        "entry-1_variable_2yr_lender",
+        "entry-1_variable_2yr_monthly_payment",
+    }
+    assert unique_ids == expected
+
+    # Verify names are human-readable.
+    names = {e.name for e in entities}
+    assert "Fixed 2yr Rate" in names
+    assert "Fixed 2yr Lender" in names
+    assert "Fixed 2yr Monthly Payment" in names
+    assert "Variable 2yr Rate" in names
+    assert "Variable 2yr Lender" in names
+    assert "Variable 2yr Monthly Payment" in names

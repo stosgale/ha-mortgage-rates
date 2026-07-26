@@ -33,25 +33,30 @@ The integration is configured entirely through the Home Assistant UI.
 
    The loan-to-value (LTV) ratio is computed automatically from your Property Value and Mortgage Amount.
 
-After setup, a sensor is created with a title you choose during the flow. You can add multiple config entries to track different scenarios (e.g. compare a remortgage against a new purchase).
+After setup, a set of sensors is created with a title you choose during the flow. The coordinator groups products by `(rate_type, initial_term_years)` and creates one sensor family per group (e.g. `fixed_2yr`, `variable_2yr`, `fixed_5yr`). You can add multiple config entries to track different scenarios (e.g. compare a remortgage against a new purchase).
 
 ## Entities
 
-| Entity | Type | Description | Attributes |
-|--------|------|-------------|------------|
-| `sensor.<title>_best_rate` | Sensor (%) | Best current mortgage rate for your scenario | `lender`, `aprc`, `product_fees`, `rate_type`, `initial_term_years`, `max_ltv`, `monthly_payment`, `last_updated` |
+For each `(rate_type, term)` group returned by Moneyfacts, three sensors are created:
+
+| Entity suffix | Type | Description | Attributes |
+|---------------|------|-------------|------------|
+| `_rate` | Sensor (%) | Cheapest initial rate for the group | full group product data + `last_updated` |
+| `_lender` | Sensor | Lender offering the cheapest product in the group | full group product data + `last_updated` |
+| `_monthly_payment` | Sensor (GBP) | Initial monthly payment for the cheapest product in the group | full group product data + `last_updated` |
+
+Sensor names follow the pattern `sensor.<title>_<type>_<term>yr_<field>`, e.g.
+`sensor.my_mortgage_fixed_2yr_rate`, `sensor.my_mortgage_variable_2yr_lender`.
 
 ## Data source
 
 Rate data is sourced from **moneyfactscompare.co.uk** and refreshed once per day. The data is provided for informational purposes only and does not constitute financial advice.
 
-## Limitations (v1)
-
-This is a first release with the following known limitations:
+## Limitations
 
 - **First page only.** The integration only sees the first page of Moneyfacts results (roughly 20-50 products). More products will be available in a future release.
-- **Best rate = lowest initial rate.** Products are ranked by their initial interest rate, not by total cost over the term. A product with a lower rate but higher fees may rank above a product with a higher rate but lower overall cost.
-- **No built-in alerts.** There is no native notification system for rate changes. Use Home Assistant automations to send alerts when the rate drops below a threshold or the lender/product changes.
+- **Best rate = lowest initial rate per group.** Products are ranked by their initial interest rate within each `(rate_type, term)` group, not by total cost over the term. A product with a lower rate but higher fees may rank above a product with a higher rate but lower overall cost.
+- **No built-in alerts.** There is no native notification system for rate changes. Use Home Assistant automations to send alerts when a rate drops below a threshold or a lender/product changes.
 - **Data quality depends on Moneyfacts.** All rate and product information is provided as-is from moneyfactscompare.co.uk. Verify details directly with lenders before making any financial decision.
 
 ## License
