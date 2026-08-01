@@ -4,28 +4,18 @@
     "step": {
       "user": {
         "title": "Mortgage Scenario",
-        "description": "Enter your mortgage details to find the best available rate.",
+        "description": "Enter your mortgage details to find the best available rate. Tracked lenders are optional.",
         "data": {
-          "property_value": "Property Value (£)",
-          "mortgage_amount": "Mortgage Amount (£)",
+          "property_value": "Property Value (\u00a3)",
+          "mortgage_amount": "Mortgage Amount (\u00a3)",
           "purpose": "Purpose",
-          "term": "Term (years)"
+          "term": "Term (years)",
+          "tracked_lenders": "Tracked Lenders (comma-separated)"
         }
-      }
-    },
-    "error": {
-      "invalid_amount": "Mortgage amount must be less than property value.",
-      "invalid_value": "Please enter a valid value."
-    },
-    "abort": {
-      "already_configured": "This mortgage scenario is already configured."
-    }
-  },
-  "options": {
-    "step": {
-      "init": {
+      },
+      "reconfigure": {
         "title": "Edit Mortgage Scenario",
-        "description": "Update your mortgage details. Leave tracked lenders blank for best rates only.",
+        "description": "Update your mortgage details. Add comma-separated lender names to track their rates.",
         "data": {
           "property_value": "Property Value (\u00a3)",
           "mortgage_amount": "Mortgage Amount (\u00a3)",
@@ -38,6 +28,10 @@
     "error": {
       "invalid_amount": "Mortgage amount must be less than property value.",
       "invalid_value": "Please enter a valid value."
+    },
+    "abort": {
+      "already_configured": "This mortgage scenario is already configured.",
+      "already_configured_with_different_credentials": "A different mortgage configuration already exists."
     }
   }
 }
