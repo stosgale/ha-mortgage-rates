@@ -128,6 +128,31 @@ class MortgageRatesConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=_DATA_SCHEMA,
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_PROPERTY_VALUE,
+                        default=current_data.get(CONF_PROPERTY_VALUE),
+                    ): vol.Coerce(int),
+                    vol.Required(
+                        CONF_MORTGAGE_AMOUNT,
+                        default=current_data.get(CONF_MORTGAGE_AMOUNT),
+                    ): vol.Coerce(int),
+                    vol.Required(
+                        CONF_PURPOSE,
+                        default=current_data.get(CONF_PURPOSE),
+                    ): vol.In(PURPOSE_LABELS),
+                    vol.Optional(
+                        CONF_TERM,
+                        default=current_data.get(CONF_TERM, DEFAULT_TERM),
+                    ): vol.Coerce(int),
+                    vol.Optional(
+                        CONF_TRACKED_LENDERS,
+                        default=current_data.get(
+                            CONF_TRACKED_LENDERS, DEFAULT_TRACKED_LENDERS
+                        ),
+                    ): str,
+                }
+            ),
             errors=errors,
         )
