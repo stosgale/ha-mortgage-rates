@@ -3,14 +3,16 @@ from __future__ import annotations
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
 
 from .const import (
     CONF_MORTGAGE_AMOUNT,
     CONF_PROPERTY_VALUE,
     CONF_PURPOSE,
     CONF_TERM,
+    CONF_TRACKED_LENDERS,
     DEFAULT_TERM,
+    DEFAULT_TRACKED_LENDERS,
     DOMAIN,
     PURPOSE_BTL,
     PURPOSE_FTB,
@@ -81,5 +83,76 @@ class MortgageRatesConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user",
             data_schema=data_schema,
+            errors=errors,
+        )
+
+    @staticmethod
+    def async_get_options_flow(config_entry):
+        """Return the options flow handler."""
+        return MortgageRatesOptionsFlow(config_entry)
+
+
+class MortgageRatesOptionsFlow(OptionsFlow):
+    """Handle options (reconfigure) for UK Mortgage Rates."""
+
+    def __init__(self, config_entry):
+        """Initialize the options flow."""
+        self._entry = config_entry
+
+    async def async_step_init(self, user_input=None):
+        """Manage the options."""
+        errors = {}
+        data = dict(self._entry.data)
+
+        if user_input is not None:
+            property_value = user_input[CONF_PROPERTY_VALUE]
+            mortgage_amount = user_input[CONF_MORTGAGE_AMOUNT]
+            term = user_input.get(CONF_TERM, DEFAULT_TERM)
+
+            if property_value <= 0:
+                errors[CONF_PROPERTY_VALUE] = "invalid_value"
+            elif mortgage_amount <= 0:
+                errors[CONF_MORTGAGE_AMOUNT] = "invalid_value"
+            elif mortgage_amount >= property_value:
+                errors[CONF_MORTGAGE_AMOUNT] = "invalid_amount"
+            elif term < 1 or term > 40:
+                errors[CONF_TERM] = "invalid_value"
+
+            if not errors:
+                ltv = int(mortgage_amount / property_value * 100)
+                purpose = user_input[CONF_PURPOSE]
+                purpose_label = PURPOSE_LABELS.get(purpose, purpose)
+                title = f"{purpose_label} ({ltv}% LTV, {term}yr)"
+                return self.async_create_entry(
+                    title=title,
+                    data=user_input,
+                )
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_PROPERTY_VALUE,
+                        default=data.get(CONF_PROPERTY_VALUE),
+                    ): vol.Coerce(int),
+                    vol.Required(
+                        CONF_MORTGAGE_AMOUNT,
+                        default=data.get(CONF_MORTGAGE_AMOUNT),
+                    ): vol.Coerce(int),
+                    vol.Required(
+                        CONF_PURPOSE,
+                        default=data.get(CONF_PURPOSE),
+                    ): vol.In(PURPOSE_LABELS),
+                    vol.Optional(
+                        CONF_TERM,
+                        default=data.get(CONF_TERM, DEFAULT_TERM),
+                    ): vol.Coerce(int),
+                    vol.Optional(
+                        CONF_TRACKED_LENDERS,
+                        default=data.get(CONF_TRACKED_LENDERS, DEFAULT_TRACKED_LENDERS),
+                    ): str,
+                }
+            ),
             errors=errors,
         )

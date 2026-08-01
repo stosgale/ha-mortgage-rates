@@ -67,6 +67,7 @@ from .const import (
     CONF_PROPERTY_VALUE,
     CONF_PURPOSE,
     CONF_TERM,
+    CONF_TRACKED_LENDERS,
     DOMAIN,
     PURPOSE_BTL,
     PURPOSE_FTB,
@@ -249,6 +250,23 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     key, rate, product.get("monthly_payment"), calc,
                 )
                 product["monthly_payment"] = calc
+
+        tracked_raw = self._config.get(CONF_TRACKED_LENDERS, "")
+        if tracked_raw:
+            lender_names = [l.strip().lower() for l in tracked_raw.split(",") if l.strip()]
+            for lender_name in lender_names:
+                for key, products_list in groups.items():
+                    matching = [
+                        p for p in products_list
+                        if p.get("lender") and lender_name in p["lender"].lower()
+                    ]
+                    if matching:
+                        best = min(matching, key=lambda p: p["rate"])
+                        if mortgage_amount > 0:
+                            best["monthly_payment"] = self._calc_monthly_payment(
+                                best["rate"], mortgage_amount, term_years
+                            )
+                        result[f"{key}__{lender_name}"] = best
 
         result["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         return result

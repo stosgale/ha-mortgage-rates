@@ -20,5 +20,24 @@
     "abort": {
       "already_configured": "This mortgage scenario is already configured."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Edit Mortgage Scenario",
+        "description": "Update your mortgage details. Leave tracked lenders blank for best rates only.",
+        "data": {
+          "property_value": "Property Value (\u00a3)",
+          "mortgage_amount": "Mortgage Amount (\u00a3)",
+          "purpose": "Purpose",
+          "term": "Term (years)",
+          "tracked_lenders": "Tracked Lenders (comma-separated)"
+        }
+      }
+    },
+    "error": {
+      "invalid_amount": "Mortgage amount must be less than property value.",
+      "invalid_value": "Please enter a valid value."
+    }
   }
 }

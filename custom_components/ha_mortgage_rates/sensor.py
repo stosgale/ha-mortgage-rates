@@ -72,19 +72,22 @@ def _display_name(group_key: str, field: str) -> str:
 
     Examples:
       - ``fixed_2yr`` + ``rate``            -> ``Fixed 2yr Rate``
+      - ``fixed_2yr__nationwide`` + ``rate`` -> ``Fixed 2yr Nationwide Rate``
       - ``variable_unknown_term`` + ``lender`` -> ``Variable Unknown Term Lender``
-      - ``unknown_type_5yr`` + ``monthly_payment`` -> ``Unknown Type 5yr Monthly Payment``
     """
+    if "__" in group_key:
+        base, lender = group_key.rsplit("__", 1)
+        base_name = _display_name(base, field)
+        lender_display = " ".join(part.capitalize() for part in lender.split("_"))
+        parts = base_name.rsplit(" ", 1)
+        return f"{parts[0]} {lender_display} {parts[1]}"
+
     parts = group_key.split("_")
-    # The last part is the term token (e.g. "2yr" or "unknown-term").
-    # Everything before it is the rate type.
     term_token = parts[-1].replace("-", " ").replace("_", " ")
     type_parts = parts[:-1]
-
     type_name = " ".join(part.capitalize() for part in type_parts) if type_parts else "Unknown"
     field_name = " ".join(part.capitalize() for part in field.split("_"))
     term_token = " ".join(part.capitalize() for part in term_token.split())
-
     return f"{type_name} {term_token} {field_name}"
 
 
