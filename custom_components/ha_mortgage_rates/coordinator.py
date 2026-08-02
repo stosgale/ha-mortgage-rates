@@ -95,13 +95,6 @@ _URL_TEMPLATES: dict[str, str] = {
     PURPOSE_BTL: "https://moneyfactscompare.co.uk/mortgages/buy-to-let/{ltv}-ltv/?sortBy=InitialRate&pageSize=100",
 }
 
-_UNFILTERED_URLS: dict[str, str] = {
-    PURPOSE_REMORTGAGE: "https://moneyfactscompare.co.uk/mortgages/remortgage/?sortBy=InitialRate&pageSize=100",
-    PURPOSE_FTB: "https://moneyfactscompare.co.uk/mortgages/first-time-buyer-mortgages/?sortBy=InitialRate&pageSize=100",
-    PURPOSE_HOME_MOVER: "https://moneyfactscompare.co.uk/mortgages/?sortBy=InitialRate&pageSize=100",
-    PURPOSE_BTL: "https://moneyfactscompare.co.uk/mortgages/buy-to-let/?sortBy=InitialRate&pageSize=100",
-}
-
 # Mobile/desktop browsers accept HTML; keep the request simple and cache-friendly.
 _HEADERS = {
     "User-Agent": (
@@ -181,47 +174,75 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         tracked_raw = self._config.get(CONF_TRACKED_LENDERS, "")
         if tracked_raw:
             lender_names = {l.strip().lower() for l in tracked_raw.split(",") if l.strip()}
-            found = {k.split("__")[-1] for k in result if "__" in k}
-            missing = lender_names - found
+            all_products = self._parse_products(html)
+            mortgage_amount = self._config.get(CONF_MORTGAGE_AMOUNT, 0)
+            term_years = self._config.get(CONF_TERM, 25)
+            missing = self._add_tracked_lenders(
+                result, all_products, lender_names, mortgage_amount, term_years
+            )
             if missing:
-                _LOGGER.info("Lenders not on LTV page, trying unfiltered: %s", missing)
-                unfiltered_url = _UNFILTERED_URLS.get(
-                    self._config.get(CONF_PURPOSE, PURPOSE_REMORTGAGE)
-                )
-                try:
-                    async with async_timeout.timeout(REQUEST_TIMEOUT_SECONDS):
-                        resp = await self._session.get(
-                            unfiltered_url, headers=_HEADERS, raise_for_status=True
-                        )
-                        unfiltered_html = await resp.text()
-                except (aiohttp.ClientError, asyncio.TimeoutError):
-                    _LOGGER.warning("Failed to fetch unfiltered page for tracked lenders")
-                else:
-                    unfiltered_products = self._parse_products(unfiltered_html)
-                    mortgage_amount = self._config.get(CONF_MORTGAGE_AMOUNT, 0)
-                    term_years = self._config.get(CONF_TERM, 25)
-                    for lender_name in sorted(missing):
-                        matched = [
-                            p for p in unfiltered_products
-                            if p.get("lender") and lender_name in p["lender"].lower()
-                        ]
-                        if matched:
-                            by_group: dict[str, list[dict]] = {}
-                            for p in matched:
-                                key = _group_key(p.get("rate_type"), p.get("initial_term_years"))
-                                by_group.setdefault(key, []).append(p)
-                            for key, prods in by_group.items():
-                                best = min(prods, key=lambda p: p["rate"])
-                                if mortgage_amount > 0:
-                                    best["monthly_payment"] = self._calc_monthly_payment(
-                                        best["rate"], mortgage_amount, term_years
-                                    )
-                                result[f"{key}__{lender_name}"] = best
-                            _LOGGER.info("Found '%s' on unfiltered page", lender_name)
-                        else:
-                            _LOGGER.warning("Lender '%s' not found anywhere", lender_name)
+                purpose = self._config.get(CONF_PURPOSE, PURPOSE_REMORTGAGE)
+                current_ltv = int(
+                    round(mortgage_amount / self._config.get(CONF_PROPERTY_VALUE, 1) * 100)
+                ) if self._config.get(CONF_PROPERTY_VALUE) else None
+                for band in _LTV_BANDS.get(purpose, []):
+                    if current_ltv is not None and band == self._nearest_ltv_band(purpose, current_ltv):
+                        continue
+                    url = _URL_TEMPLATES.get(purpose, _URL_TEMPLATES[PURPOSE_REMORTGAGE]).format(ltv=band)
+                    try:
+                        async with async_timeout.timeout(REQUEST_TIMEOUT_SECONDS):
+                            resp = await self._session.get(url, headers=_HEADERS, raise_for_status=True)
+                            band_html = await resp.text()
+                    except (aiohttp.ClientError, asyncio.TimeoutError):
+                        continue
+                    band_products = self._parse_products(band_html)
+                    still_missing = self._add_tracked_lenders(
+                        result, band_products, missing, mortgage_amount, term_years
+                    )
+                    if not still_missing:
+                        break
+                    missing = still_missing
+                if missing:
+                    for name in sorted(missing):
+                        _LOGGER.warning("Lender '%s' not found in any LTV band", name)
 
         return result
+
+    def _add_tracked_lenders(
+        self,
+        result: dict[str, Any],
+        products: list[dict[str, Any]],
+        lender_names: set[str],
+        mortgage_amount: float,
+        term_years: int,
+    ) -> set[str]:
+        """Add tracked lenders found in products to result. Returns still-missing names."""
+        still_missing: set[str] = set()
+        by_lender: dict[str, list[dict]] = {}
+        for p in products:
+            lender = (p.get("lender") or "").lower()
+            for name in lender_names:
+                if name in lender:
+                    by_lender.setdefault(name, []).append(p)
+
+        for name in sorted(lender_names):
+            matched = by_lender.get(name, [])
+            if not matched:
+                still_missing.add(name)
+                continue
+            by_group: dict[str, list[dict]] = {}
+            for p in matched:
+                key = _group_key(p.get("rate_type"), p.get("initial_term_years"))
+                by_group.setdefault(key, []).append(p)
+            for key, prods in by_group.items():
+                best = min(prods, key=lambda p: p["rate"])
+                if mortgage_amount > 0:
+                    best["monthly_payment"] = self._calc_monthly_payment(
+                        best["rate"], mortgage_amount, term_years
+                    )
+                result[f"{key}__{name}"] = best
+            _LOGGER.info("Tracked lender '%s': %d products across groups", name, len(matched))
+        return still_missing
 
     def _parse_products(self, html: str) -> list[dict[str, Any]]:
         """Parse HTML and return a flat list of extracted products."""
