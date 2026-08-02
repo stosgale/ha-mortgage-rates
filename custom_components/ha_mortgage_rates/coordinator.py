@@ -356,6 +356,9 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 key = _group_key(p.get("rate_type"), p.get("initial_term_years"))
                 by_group.setdefault(key, []).append(p)
             for key, prods in by_group.items():
+                rate_types = self._config.get(CONF_RATE_TYPES, "")
+                if not self._rate_type_allowed(key, rate_types):
+                    continue
                 best = min(prods, key=lambda p: p["rate"])
                 if mortgage_amount > 0:
                     best["monthly_payment"] = self._calc_monthly_payment(

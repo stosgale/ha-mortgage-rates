@@ -23,6 +23,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 
 from .const import DOMAIN
@@ -163,3 +164,9 @@ async def async_setup_entry(
             entities.append(MortgageRateSensor(coordinator, entry, group_key, meta))
 
     async_add_entities(entities)
+
+    er = async_get_entity_registry(hass)
+    current_ids = {e.unique_id for e in entities}
+    for entity in list(er.entities.values()):
+        if entity.config_entry_id == entry.entry_id and entity.unique_id not in current_ids:
+            er.async_remove(entity.entity_id)
