@@ -31,7 +31,7 @@
     },
     "abort": {
       "already_configured": "This mortgage scenario is already configured.",
-      "already_configured_with_different_credentials": "A different mortgage configuration already exists."
+      "reconfigure_successful": "Configuration updated. The integration is reloading."
     }
   }
 }

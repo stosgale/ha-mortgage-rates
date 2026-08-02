@@ -120,11 +120,11 @@ class MortgageRatesConfigFlow(ConfigFlow, domain=DOMAIN):
                 purpose_label = PURPOSE_LABELS.get(purpose, purpose)
                 title = f"{purpose_label} ({ltv}% LTV, {term}yr)"
 
-                return self.async_update_reload_and_abort(
-                    entry,
-                    data_updates=user_input,
-                    title=title,
+                self.hass.config_entries.async_update_entry(
+                    entry, data={**current_data, **user_input}, title=title
                 )
+                await self.hass.config_entries.async_reload(entry.entry_id)
+                return self.async_abort(reason="reconfigure_successful")
 
         return self.async_show_form(
             step_id="reconfigure",

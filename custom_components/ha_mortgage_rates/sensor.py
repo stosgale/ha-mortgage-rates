@@ -138,6 +138,12 @@ class MortgageRateSensor(CoordinatorEntity, SensorEntity):
         attrs["last_updated"] = data.get("last_updated")
         attrs["_config_mortgage_amount"] = self._entry.data.get("mortgage_amount")
         attrs["_config_term"] = self._entry.data.get("term")
+        attrs["_config_tracked_lenders"] = self._entry.data.get(
+            "tracked_lenders", "(missing)"
+        )
+        attrs["_coordinator_groups"] = ",".join(
+            sorted(k for k in data if k != "last_updated")
+        )
         return attrs
 
 
