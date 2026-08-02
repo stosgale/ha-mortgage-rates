@@ -239,7 +239,7 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @staticmethod
     def _parse_products_from_js(html: str, ltv_band: int) -> list[dict[str, Any]]:
         """Parse all products from the embedded JavaScript Results array."""
-        m = re.search(r'"Results"\s*:\s*\[(.*)', html)
+        m = re.search(r'"Results"\s*:\s*\[(.*)', html, re.DOTALL)
         if not m:
             return []
         rest = m.group(1)
@@ -255,7 +255,7 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     break
         results_str = rest[:end]
         products: list[dict[str, Any]] = []
-        for ap in re.finditer(r'"AllProducts"\s*:\s*\[({[^]]+})\]', results_str):
+        for ap in re.finditer(r'"AllProducts"\s*:\s*\[({[^]]+})\]', results_str, re.DOTALL):
             try:
                 raw = json.loads(ap.group(1))
             except json.JSONDecodeError:
@@ -277,7 +277,7 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _LOGGER.info(
             "JS parse: %d products from %d AllProducts entries",
             len(products),
-            len(list(re.finditer(r'"AllProducts"\s*:\s*\[({[^]]+})\]', results_str))),
+            len(list(re.finditer(r'"AllProducts"\s*:\s*\[({[^]]+})\]', results_str, re.DOTALL))),
         )
         return products
 
