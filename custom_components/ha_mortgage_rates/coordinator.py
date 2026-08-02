@@ -169,16 +169,22 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except asyncio.TimeoutError as err:
             raise UpdateFailed("timeout fetching mortgage rates") from err
 
-        result = self._parse_html(html)
+        ltv_band = self._get_ltv_band()
+        products = self._parse_products_from_js(html, ltv_band)
+        if not products:
+            _LOGGER.warning("JS parse returned no products, falling back to HTML parser")
+            result = self._parse_html(html)
+            products = self._parse_products_from_html(html, ltv_band)
+        else:
+            result = self._build_result(products)
 
         tracked_raw = self._config.get(CONF_TRACKED_LENDERS, "")
         if tracked_raw:
             lender_names = {l.strip().lower() for l in tracked_raw.split(",") if l.strip()}
-            all_products = self._parse_products(html)
             mortgage_amount = self._config.get(CONF_MORTGAGE_AMOUNT, 0)
             term_years = self._config.get(CONF_TERM, 25)
             missing = self._add_tracked_lenders(
-                result, all_products, lender_names, mortgage_amount, term_years
+                result, products, lender_names, mortgage_amount, term_years
             )
             if missing:
                 purpose = self._config.get(CONF_PURPOSE, PURPOSE_REMORTGAGE)
@@ -195,7 +201,7 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             band_html = await resp.text()
                     except (aiohttp.ClientError, asyncio.TimeoutError):
                         continue
-                    band_products = self._parse_products(band_html)
+                    band_products = self._parse_products_from_js(band_html, band)
                     still_missing = self._add_tracked_lenders(
                         result, band_products, missing, mortgage_amount, term_years
                     )
@@ -206,6 +212,92 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     for name in sorted(missing):
                         _LOGGER.warning("Lender '%s' not found in any LTV band", name)
 
+        return result
+
+    def _get_ltv_band(self) -> int:
+        """Return the LTV band for the current page URL."""
+        property_value = self._config.get(CONF_PROPERTY_VALUE, 0)
+        mortgage_amount = self._config.get(CONF_MORTGAGE_AMOUNT, 0)
+        if property_value and mortgage_amount:
+            ltv = int(round((mortgage_amount / property_value) * 100))
+            ltv = max(ltv, 1)
+        else:
+            ltv = 60
+        purpose = self._config.get(CONF_PURPOSE, PURPOSE_REMORTGAGE)
+        return self._nearest_ltv_band(purpose, ltv)
+
+    @staticmethod
+    def _parse_products_from_js(html: str, ltv_band: int) -> list[dict[str, Any]]:
+        """Parse all products from the embedded JavaScript Results array."""
+        m = re.search(r'"Results"\s*:\s*\[(.*)', html)
+        if not m:
+            return []
+        rest = m.group(1)
+        depth = 1
+        end = 0
+        for i, c in enumerate(rest):
+            if c == "[":
+                depth += 1
+            elif c == "]":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        results_str = rest[:end]
+        products: list[dict[str, Any]] = []
+        for ap in re.finditer(r'"AllProducts"\s*:\s*\[({[^]]+})\]', results_str):
+            try:
+                raw = json.loads(ap.group(1))
+            except json.JSONDecodeError:
+                continue
+            rate = raw.get("Rate")
+            if rate is None:
+                continue
+            description = raw.get("Description", "")
+            products.append({
+                "lender": raw.get("Company"),
+                "rate": float(rate),
+                "aprc": float(raw.get("APRC", 0)),
+                "product_fees": float(raw.get("ProductFees", 0)),
+                "monthly_payment": float(raw.get("InitialMonthlyPayment", 0)),
+                "rate_type": MortgageRatesCoordinator._parse_rate_type(description),
+                "initial_term_years": MortgageRatesCoordinator._parse_initial_term(description),
+                "max_ltv": ltv_band,
+            })
+        _LOGGER.info(
+            "JS parse: %d products from %d AllProducts entries",
+            len(products),
+            len(list(re.finditer(r'"AllProducts"\s*:\s*\[({[^]]+})\]', results_str))),
+        )
+        return products
+
+    def _parse_products_from_html(self, html: str, ltv_band: int) -> list[dict[str, Any]]:
+        """Fallback: parse products from visible HTML cards."""
+        soup = BeautifulSoup(html, "html.parser")
+        products: list[dict[str, Any]] = []
+        for row in soup.select("li.mortgages-table-item.table-item"):
+            product = self._extract_product(row)
+            if product.get("rate") is not None:
+                products.append(product)
+        return products
+
+    def _build_result(self, products: list[dict[str, Any]]) -> dict[str, Any]:
+        """Group products by (rate_type, term), find cheapest, calculate payments."""
+        groups: dict[str, list[dict]] = {}
+        for p in products:
+            key = _group_key(p.get("rate_type"), p.get("initial_term_years"))
+            groups.setdefault(key, []).append(p)
+        if not groups:
+            raise UpdateFailed("no rates found")
+        result = {key: min(prods, key=lambda p: p["rate"]) for key, prods in groups.items()}
+        mortgage_amount = self._config.get(CONF_MORTGAGE_AMOUNT, 0)
+        term_years = self._config.get(CONF_TERM, 25)
+        if mortgage_amount > 0:
+            for key, product in result.items():
+                product["monthly_payment"] = self._calc_monthly_payment(
+                    product["rate"], mortgage_amount, term_years
+                )
+        result["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         return result
 
     def _add_tracked_lenders(
@@ -243,17 +335,6 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 result[f"{key}__{name}"] = best
             _LOGGER.info("Tracked lender '%s': %d products across groups", name, len(matched))
         return still_missing
-
-    def _parse_products(self, html: str) -> list[dict[str, Any]]:
-        """Parse HTML and return a flat list of extracted products."""
-        soup = BeautifulSoup(html, "html.parser")
-        rows = soup.select("li.mortgages-table-item.table-item")
-        products: list[dict[str, Any]] = []
-        for row in rows:
-            product = self._extract_product(row)
-            if product.get("rate") is not None:
-                products.append(product)
-        return products
 
     def _build_url(self) -> str:
         """Build the moneyfactscompare URL from configured purpose and LTV."""
