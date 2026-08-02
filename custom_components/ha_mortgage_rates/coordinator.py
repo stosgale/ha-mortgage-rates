@@ -95,6 +95,13 @@ _URL_TEMPLATES: dict[str, str] = {
     PURPOSE_BTL: "https://moneyfactscompare.co.uk/mortgages/buy-to-let/{ltv}-ltv/?sortBy=InitialRate&pageSize=100",
 }
 
+_UNFILTERED_URLS: dict[str, str] = {
+    PURPOSE_REMORTGAGE: "https://moneyfactscompare.co.uk/mortgages/remortgage/?sortBy=InitialRate&pageSize=100",
+    PURPOSE_FTB: "https://moneyfactscompare.co.uk/mortgages/first-time-buyer-mortgages/?sortBy=InitialRate&pageSize=100",
+    PURPOSE_HOME_MOVER: "https://moneyfactscompare.co.uk/mortgages/?sortBy=InitialRate&pageSize=100",
+    PURPOSE_BTL: "https://moneyfactscompare.co.uk/mortgages/buy-to-let/?sortBy=InitialRate&pageSize=100",
+}
+
 # Mobile/desktop browsers accept HTML; keep the request simple and cache-friendly.
 _HEADERS = {
     "User-Agent": (
@@ -169,7 +176,63 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except asyncio.TimeoutError as err:
             raise UpdateFailed("timeout fetching mortgage rates") from err
 
-        return self._parse_html(html)
+        result = self._parse_html(html)
+
+        tracked_raw = self._config.get(CONF_TRACKED_LENDERS, "")
+        if tracked_raw:
+            lender_names = {l.strip().lower() for l in tracked_raw.split(",") if l.strip()}
+            found = {k.split("__")[-1] for k in result if "__" in k}
+            missing = lender_names - found
+            if missing:
+                _LOGGER.info("Lenders not on LTV page, trying unfiltered: %s", missing)
+                unfiltered_url = _UNFILTERED_URLS.get(
+                    self._config.get(CONF_PURPOSE, PURPOSE_REMORTGAGE)
+                )
+                try:
+                    async with async_timeout.timeout(REQUEST_TIMEOUT_SECONDS):
+                        resp = await self._session.get(
+                            unfiltered_url, headers=_HEADERS, raise_for_status=True
+                        )
+                        unfiltered_html = await resp.text()
+                except (aiohttp.ClientError, asyncio.TimeoutError):
+                    _LOGGER.warning("Failed to fetch unfiltered page for tracked lenders")
+                else:
+                    unfiltered_products = self._parse_products(unfiltered_html)
+                    mortgage_amount = self._config.get(CONF_MORTGAGE_AMOUNT, 0)
+                    term_years = self._config.get(CONF_TERM, 25)
+                    for lender_name in sorted(missing):
+                        matched = [
+                            p for p in unfiltered_products
+                            if p.get("lender") and lender_name in p["lender"].lower()
+                        ]
+                        if matched:
+                            by_group: dict[str, list[dict]] = {}
+                            for p in matched:
+                                key = _group_key(p.get("rate_type"), p.get("initial_term_years"))
+                                by_group.setdefault(key, []).append(p)
+                            for key, prods in by_group.items():
+                                best = min(prods, key=lambda p: p["rate"])
+                                if mortgage_amount > 0:
+                                    best["monthly_payment"] = self._calc_monthly_payment(
+                                        best["rate"], mortgage_amount, term_years
+                                    )
+                                result[f"{key}__{lender_name}"] = best
+                            _LOGGER.info("Found '%s' on unfiltered page", lender_name)
+                        else:
+                            _LOGGER.warning("Lender '%s' not found anywhere", lender_name)
+
+        return result
+
+    def _parse_products(self, html: str) -> list[dict[str, Any]]:
+        """Parse HTML and return a flat list of extracted products."""
+        soup = BeautifulSoup(html, "html.parser")
+        rows = soup.select("li.mortgages-table-item.table-item")
+        products: list[dict[str, Any]] = []
+        for row in rows:
+            product = self._extract_product(row)
+            if product.get("rate") is not None:
+                products.append(product)
+        return products
 
     def _build_url(self) -> str:
         """Build the moneyfactscompare URL from configured purpose and LTV."""
@@ -260,36 +323,6 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     key, rate, product.get("monthly_payment"), calc,
                 )
                 product["monthly_payment"] = calc
-
-        tracked_raw = self._config.get(CONF_TRACKED_LENDERS, "")
-        if tracked_raw:
-            lender_names = [l.strip().lower() for l in tracked_raw.split(",") if l.strip()]
-            _LOGGER.info("Tracking lenders: %s", lender_names)
-            for lender_name in lender_names:
-                total_matched = 0
-                for key, products_list in groups.items():
-                    matching = [
-                        p for p in products_list
-                        if p.get("lender") and lender_name in p["lender"].lower()
-                    ]
-                    if matching:
-                        best = min(matching, key=lambda p: p["rate"])
-                        total_matched += len(matching)
-                        if mortgage_amount > 0:
-                            best["monthly_payment"] = self._calc_monthly_payment(
-                                best["rate"], mortgage_amount, term_years
-                            )
-                        result[f"{key}__{lender_name}"] = best
-                if total_matched == 0:
-                    _LOGGER.warning(
-                        "Tracked lender '%s' not found on page. Available: %s",
-                        lender_name, ", ".join(all_lenders),
-                    )
-                else:
-                    _LOGGER.info(
-                        "Tracked lender '%s': matched %d products across groups",
-                        lender_name, total_matched,
-                    )
 
         result["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         return result
