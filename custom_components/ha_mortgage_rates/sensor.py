@@ -161,6 +161,8 @@ async def async_setup_entry(
         if group_key == "last_updated":
             continue
         for meta in _FIELD_METAS:
+            if "__" in group_key and meta.field == "lender":
+                continue
             entities.append(MortgageRateSensor(coordinator, entry, group_key, meta))
 
     async_add_entities(entities)
