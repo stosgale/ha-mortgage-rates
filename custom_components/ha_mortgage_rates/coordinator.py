@@ -89,10 +89,10 @@ _LTV_BANDS: dict[str, list[int]] = {
 
 # URL path templates for each purpose. {ltv} is an integer like 60.
 _URL_TEMPLATES: dict[str, str] = {
-    PURPOSE_REMORTGAGE: "https://moneyfactscompare.co.uk/mortgages/remortgage/{ltv}-ltv/",
-    PURPOSE_FTB: "https://moneyfactscompare.co.uk/mortgages/first-time-buyer-mortgages/{ltv}-ltv/",
-    PURPOSE_HOME_MOVER: "https://moneyfactscompare.co.uk/mortgages/{ltv}-ltv-mortgages/",
-    PURPOSE_BTL: "https://moneyfactscompare.co.uk/mortgages/buy-to-let/{ltv}-ltv/",
+    PURPOSE_REMORTGAGE: "https://moneyfactscompare.co.uk/mortgages/remortgage/{ltv}-ltv/?sortBy=InitialRate&pageSize=30",
+    PURPOSE_FTB: "https://moneyfactscompare.co.uk/mortgages/first-time-buyer-mortgages/{ltv}-ltv/?sortBy=InitialRate&pageSize=30",
+    PURPOSE_HOME_MOVER: "https://moneyfactscompare.co.uk/mortgages/{ltv}-ltv-mortgages/?sortBy=InitialRate&pageSize=30",
+    PURPOSE_BTL: "https://moneyfactscompare.co.uk/mortgages/buy-to-let/{ltv}-ltv/?sortBy=InitialRate&pageSize=30",
 }
 
 # Mobile/desktop browsers accept HTML; keep the request simple and cache-friendly.
