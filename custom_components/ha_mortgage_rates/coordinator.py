@@ -228,6 +228,16 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not groups:
             raise UpdateFailed("no rates found")
 
+        all_lenders = sorted(set(
+            p["lender"] for products in groups.values()
+            for p in products if p.get("lender")
+        ))
+        _LOGGER.info(
+            "Parsed %d products across %d groups. Lenders on page: %s",
+            sum(len(v) for v in groups.values()), len(groups),
+            ", ".join(all_lenders),
+        )
+
         result: dict[str, Any] = {
             key: min(products, key=lambda p: p["rate"])
             for key, products in groups.items()
@@ -254,7 +264,9 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         tracked_raw = self._config.get(CONF_TRACKED_LENDERS, "")
         if tracked_raw:
             lender_names = [l.strip().lower() for l in tracked_raw.split(",") if l.strip()]
+            _LOGGER.info("Tracking lenders: %s", lender_names)
             for lender_name in lender_names:
+                total_matched = 0
                 for key, products_list in groups.items():
                     matching = [
                         p for p in products_list
@@ -262,11 +274,22 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     ]
                     if matching:
                         best = min(matching, key=lambda p: p["rate"])
+                        total_matched += len(matching)
                         if mortgage_amount > 0:
                             best["monthly_payment"] = self._calc_monthly_payment(
                                 best["rate"], mortgage_amount, term_years
                             )
                         result[f"{key}__{lender_name}"] = best
+                if total_matched == 0:
+                    _LOGGER.warning(
+                        "Tracked lender '%s' not found on page. Available: %s",
+                        lender_name, ", ".join(all_lenders),
+                    )
+                else:
+                    _LOGGER.info(
+                        "Tracked lender '%s': matched %d products across groups",
+                        lender_name, total_matched,
+                    )
 
         result["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         return result
