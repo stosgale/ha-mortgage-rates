@@ -170,7 +170,11 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed("timeout fetching mortgage rates") from err
 
         ltv_band = self._get_ltv_band()
-        products = self._parse_products_from_js(html, ltv_band)
+        try:
+            products = self._parse_products_from_js(html, ltv_band)
+        except Exception:
+            _LOGGER.exception("JS parse failed, falling back to HTML parser")
+            products = []
         if not products:
             _LOGGER.warning("JS parse returned no products, falling back to HTML parser")
             result = self._parse_html(html)
@@ -201,7 +205,13 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             band_html = await resp.text()
                     except (aiohttp.ClientError, asyncio.TimeoutError):
                         continue
-                    band_products = self._parse_products_from_js(band_html, band)
+                    band_products = []
+                    try:
+                        band_products = self._parse_products_from_js(band_html, band)
+                    except Exception:
+                        _LOGGER.exception("JS parse failed for LTV band %d", band)
+                    if not band_products:
+                        band_products = self._parse_products_from_html(band_html, band)
                     still_missing = self._add_tracked_lenders(
                         result, band_products, missing, mortgage_amount, term_years
                     )
