@@ -236,8 +236,7 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         purpose = self._config.get(CONF_PURPOSE, PURPOSE_REMORTGAGE)
         return self._nearest_ltv_band(purpose, ltv)
 
-    @staticmethod
-    def _parse_products_from_js(html: str, ltv_band: int) -> list[dict[str, Any]]:
+    def _parse_products_from_js(self, html: str, ltv_band: int) -> list[dict[str, Any]]:
         """Parse all products from the embedded JavaScript Results array."""
         m = re.search(r'"Results"\s*:\s*\[(.*)', html, re.DOTALL)
         if not m:
