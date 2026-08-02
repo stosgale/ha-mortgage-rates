@@ -6,6 +6,7 @@ CONF_MORTGAGE_AMOUNT = "mortgage_amount"
 CONF_PURPOSE = "purpose"
 CONF_TERM = "term"
 CONF_TRACKED_LENDERS = "tracked_lenders"
+CONF_RATE_TYPES = "rate_types"
 
 PURPOSE_REMORTGAGE = "remortgage"
 PURPOSE_FTB = "first_time_buyer"

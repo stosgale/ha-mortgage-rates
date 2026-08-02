@@ -67,6 +67,7 @@ from .const import (
     CONF_MORTGAGE_AMOUNT,
     CONF_PROPERTY_VALUE,
     CONF_PURPOSE,
+    CONF_RATE_TYPES,
     CONF_TERM,
     CONF_TRACKED_LENDERS,
     DOMAIN,
@@ -299,7 +300,14 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             groups.setdefault(key, []).append(p)
         if not groups:
             raise UpdateFailed("no rates found")
-        result = {key: min(prods, key=lambda p: p["rate"]) for key, prods in groups.items()}
+        rate_types = self._config.get(CONF_RATE_TYPES, "")
+        result = {
+            key: min(prods, key=lambda p: p["rate"])
+            for key, prods in groups.items()
+            if self._rate_type_allowed(key, rate_types)
+        }
+        if not result:
+            raise UpdateFailed("no rates matching selected rate types")
         mortgage_amount = self._config.get(CONF_MORTGAGE_AMOUNT, 0)
         term_years = self._config.get(CONF_TERM, 25)
         if mortgage_amount > 0:
@@ -309,6 +317,17 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
         result["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         return result
+
+    def _rate_type_allowed(self, group_key: str, rate_types: str) -> bool:
+        """Check if a group key matches the user's selected rate types."""
+        if not rate_types.strip():
+            return True
+        allowed = {t.strip().lower() for t in rate_types.split(",") if t.strip()}
+        key_lower = group_key.lower()
+        for t in allowed:
+            if t in key_lower:
+                return True
+        return False
 
     def _add_tracked_lenders(
         self,
@@ -337,6 +356,9 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 key = _group_key(p.get("rate_type"), p.get("initial_term_years"))
                 by_group.setdefault(key, []).append(p)
             for key, prods in by_group.items():
+                rate_types = self._config.get(CONF_RATE_TYPES, "")
+                if not self._rate_type_allowed(key, rate_types):
+                    continue
                 best = min(prods, key=lambda p: p["rate"])
                 if mortgage_amount > 0:
                     best["monthly_payment"] = self._calc_monthly_payment(

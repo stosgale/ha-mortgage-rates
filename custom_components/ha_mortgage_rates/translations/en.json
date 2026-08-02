@@ -10,7 +10,8 @@
           "mortgage_amount": "Mortgage Amount (\u00a3)",
           "purpose": "Purpose",
           "term": "Term (years)",
-          "tracked_lenders": "Tracked Lenders (comma-separated)"
+          "tracked_lenders": "Tracked Lenders (comma-separated)",
+          "rate_types": "Rate Types (variable, fixed_2yr, fixed_5yr etc)"
         }
       },
       "reconfigure": {
@@ -21,7 +22,8 @@
           "mortgage_amount": "Mortgage Amount (\u00a3)",
           "purpose": "Purpose",
           "term": "Term (years)",
-          "tracked_lenders": "Tracked Lenders (comma-separated)"
+          "tracked_lenders": "Tracked Lenders (comma-separated)",
+          "rate_types": "Rate Types (variable, fixed_2yr, fixed_5yr etc)"
         }
       }
     },

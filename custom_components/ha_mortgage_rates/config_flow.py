@@ -9,6 +9,7 @@ from .const import (
     CONF_MORTGAGE_AMOUNT,
     CONF_PROPERTY_VALUE,
     CONF_PURPOSE,
+    CONF_RATE_TYPES,
     CONF_TERM,
     CONF_TRACKED_LENDERS,
     DEFAULT_TERM,
@@ -37,6 +38,7 @@ _DATA_SCHEMA = vol.Schema(
         vol.Optional(
             CONF_TRACKED_LENDERS, default=DEFAULT_TRACKED_LENDERS
         ): str,
+        vol.Optional(CONF_RATE_TYPES, default=""): str,
     }
 )
 
@@ -151,6 +153,10 @@ class MortgageRatesConfigFlow(ConfigFlow, domain=DOMAIN):
                         default=current_data.get(
                             CONF_TRACKED_LENDERS, DEFAULT_TRACKED_LENDERS
                         ),
+                    ): str,
+                    vol.Optional(
+                        CONF_RATE_TYPES,
+                        default=current_data.get(CONF_RATE_TYPES, ""),
                     ): str,
                 }
             ),
