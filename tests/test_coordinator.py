@@ -17,6 +17,7 @@ from custom_components.ha_mortgage_rates.const import (
     CONF_PROPERTY_VALUE,
     CONF_PURPOSE,
     CONF_TERM,
+    CONF_TRACKED_LENDERS,
     PURPOSE_BTL,
     PURPOSE_FTB,
     PURPOSE_HOME_MOVER,
@@ -26,6 +27,7 @@ from custom_components.ha_mortgage_rates.coordinator import (
     MortgageRatesCoordinator,
     _group_key,
 )
+from custom_components.ha_mortgage_rates.lenders import LENDER_SOURCES
 
 
 @pytest.fixture
@@ -354,3 +356,69 @@ async def test_async_update_data_timeout(hass: HomeAssistant) -> None:
 
     with pytest.raises(UpdateFailed, match="timeout fetching mortgage rates"):
         await coord._async_update_data()
+
+
+# -----------------------------------------------------------------------------
+# Lender-specific sources
+# -----------------------------------------------------------------------------
+def _hsbc_config() -> dict[str, Any]:
+    return {
+        CONF_MORTGAGE_AMOUNT: 698000,
+        CONF_PROPERTY_VALUE: 1200000,
+        CONF_PURPOSE: PURPOSE_REMORTGAGE,
+        CONF_TERM: 35,
+        CONF_TRACKED_LENDERS: "hsbc",
+    }
+
+
+def _product(lender, rate, term=2, rate_type="Fixed", ltv=60, fees=999.0):
+    return {
+        "lender": lender,
+        "rate": rate,
+        "aprc": 6.3,
+        "product_fees": fees,
+        "monthly_payment": None,
+        "rate_type": rate_type,
+        "initial_term_years": term,
+        "max_ltv": ltv,
+    }
+
+
+@pytest.mark.asyncio
+async def test_apply_lender_sources_replaces_moneyfacts_hsbc(hass: HomeAssistant) -> None:
+    coord = coordinator(hass, _hsbc_config())
+    coord._session = MagicMock()
+    products = [_product("HSBC", 5.09), _product("first direct", 4.84, fees=490.0)]
+    provided = [_product("HSBC", 4.69)]
+    with patch.dict(LENDER_SOURCES, {"hsbc": AsyncMock(return_value=provided)}):
+        merged = await coord._apply_lender_sources(products, {"hsbc"})
+
+    hsbc = [p for p in merged if p["lender"] == "HSBC"]
+    assert [p["rate"] for p in hsbc] == [4.69]
+    assert any(p["lender"] == "first direct" for p in merged)
+
+
+@pytest.mark.asyncio
+async def test_apply_lender_sources_failure_keeps_aggregator_data(hass: HomeAssistant) -> None:
+    coord = coordinator(hass, _hsbc_config())
+    coord._session = MagicMock()
+    products = [_product("HSBC", 5.09)]
+    failing = AsyncMock(side_effect=aiohttp.ClientError("boom"))
+    with patch.dict(LENDER_SOURCES, {"hsbc": failing}):
+        merged = await coord._apply_lender_sources(products, {"hsbc"})
+
+    assert [p["rate"] for p in merged] == [5.09]
+
+
+@pytest.mark.asyncio
+async def test_lender_source_makes_hsbc_cheapest_overall(hass: HomeAssistant) -> None:
+    coord = coordinator(hass, _hsbc_config())
+    coord._session = MagicMock()
+    products = [_product("HSBC", 5.09), _product("first direct", 4.84, fees=490.0)]
+    provided = [_product("HSBC", 4.69)]
+    with patch.dict(LENDER_SOURCES, {"hsbc": AsyncMock(return_value=provided)}):
+        merged = await coord._apply_lender_sources(products, {"hsbc"})
+
+    result = coord._build_result(merged)
+    assert result["fixed_2yr"]["rate"] == pytest.approx(4.69)
+    assert result["fixed_2yr"]["lender"] == "HSBC"

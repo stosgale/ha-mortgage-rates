@@ -78,6 +78,7 @@ from .const import (
     REQUEST_TIMEOUT_SECONDS,
     UPDATE_INTERVAL_SECONDS,
 )
+from .lenders import LENDER_SOURCES
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -172,6 +173,7 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed("timeout fetching mortgage rates") from err
 
         ltv_band = self._get_ltv_band()
+        products: list[dict[str, Any]] = []
         try:
             products = self._parse_products_from_js(html, ltv_band)
         except Exception:
@@ -179,14 +181,24 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             products = []
         if not products:
             _LOGGER.warning("JS parse returned no products, falling back to HTML parser")
-            result = self._parse_html(html)
             products = self._parse_products_from_html(html, ltv_band)
-        else:
-            result = self._build_result(products)
 
         tracked_raw = self._config.get(CONF_TRACKED_LENDERS, "")
-        if tracked_raw:
-            lender_names = {l.strip().lower() for l in tracked_raw.split(",") if l.strip()}
+        lender_names = (
+            {name.strip().lower() for name in tracked_raw.split(",") if name.strip()}
+            if tracked_raw
+            else set()
+        )
+
+        # For tracked lenders with their own rate page, replace the
+        # aggregator's (sometimes stale) products with the lender's own
+        # published rates before grouping.
+        if lender_names:
+            products = await self._apply_lender_sources(products, lender_names)
+
+        result = self._build_result(products)
+
+        if lender_names:
             mortgage_amount = self._config.get(CONF_MORTGAGE_AMOUNT, 0)
             term_years = self._config.get(CONF_TERM, 25)
             missing = self._add_tracked_lenders(
@@ -194,9 +206,7 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             if missing:
                 purpose = self._config.get(CONF_PURPOSE, PURPOSE_REMORTGAGE)
-                current_ltv = int(
-                    round(mortgage_amount / self._config.get(CONF_PROPERTY_VALUE, 1) * 100)
-                ) if self._config.get(CONF_PROPERTY_VALUE) else None
+                current_ltv = self._loan_to_value()
                 for band in _LTV_BANDS.get(purpose, []):
                     if current_ltv is not None and band == self._nearest_ltv_band(purpose, current_ltv):
                         continue
@@ -207,7 +217,7 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             band_html = await resp.text()
                     except (aiohttp.ClientError, asyncio.TimeoutError):
                         continue
-                    band_products = []
+                    band_products: list[dict[str, Any]] = []
                     try:
                         band_products = self._parse_products_from_js(band_html, band)
                     except Exception:
@@ -226,15 +236,72 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return result
 
-    def _get_ltv_band(self) -> int:
-        """Return the LTV band for the current page URL."""
+    async def _apply_lender_sources(
+        self,
+        products: list[dict[str, Any]],
+        lender_names: set[str],
+    ) -> list[dict[str, Any]]:
+        """Replace aggregator products for tracked lenders with their own rates.
+
+        Lenders listed in :data:`LENDER_SOURCES` publish rates that the
+        Moneyfacts chart does not always reflect (for example HSBC's
+        existing-customer switch rates).  For those lenders the Moneyfacts
+        products are dropped and the lender's own products are used instead.
+        A failure to fetch the lender page is non-fatal: the aggregator data
+        is kept so the integration still updates.
+        """
+        loan_to_value = self._loan_to_value()
+        for name in sorted(lender_names):
+            fetch = LENDER_SOURCES.get(name)
+            if fetch is None or self._session is None:
+                continue
+            try:
+                provided = await fetch(self._session, _HEADERS, loan_to_value)
+            except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+                _LOGGER.warning(
+                    "Could not fetch '%s' rates from the lender's own site (%s); "
+                    "keeping aggregator data",
+                    name,
+                    err,
+                )
+                continue
+            except Exception:
+                _LOGGER.exception(
+                    "Unexpected error fetching '%s' rates from its lender source", name
+                )
+                continue
+
+            if not provided:
+                _LOGGER.warning(
+                    "Lender source for '%s' returned no applicable products; "
+                    "keeping aggregator data",
+                    name,
+                )
+                continue
+
+            kept = [p for p in products if name not in (p.get("lender") or "").lower()]
+            replaced = len(products) - len(kept)
+            products = kept + provided
+            _LOGGER.info(
+                "Replaced %d Moneyfacts product(s) for '%s' with %d rate(s) from "
+                "the lender's own site",
+                replaced,
+                name,
+                len(provided),
+            )
+        return products
+
+    def _loan_to_value(self) -> int | None:
+        """Return the configured loan-to-value as a percentage, if calculable."""
         property_value = self._config.get(CONF_PROPERTY_VALUE, 0)
         mortgage_amount = self._config.get(CONF_MORTGAGE_AMOUNT, 0)
         if property_value and mortgage_amount:
-            ltv = int(round((mortgage_amount / property_value) * 100))
-            ltv = max(ltv, 1)
-        else:
-            ltv = 60
+            return max(1, int(round((mortgage_amount / property_value) * 100)))
+        return None
+
+    def _get_ltv_band(self) -> int:
+        """Return the LTV band for the current page URL."""
+        ltv = self._loan_to_value() or 60
         purpose = self._config.get(CONF_PURPOSE, PURPOSE_REMORTGAGE)
         return self._nearest_ltv_band(purpose, ltv)
 
@@ -372,16 +439,7 @@ class MortgageRatesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Build the moneyfactscompare URL from configured purpose and LTV."""
         purpose = self._config.get(CONF_PURPOSE, PURPOSE_REMORTGAGE)
         template = _URL_TEMPLATES.get(purpose, _URL_TEMPLATES[PURPOSE_REMORTGAGE])
-
-        property_value = self._config.get(CONF_PROPERTY_VALUE, 0)
-        mortgage_amount = self._config.get(CONF_MORTGAGE_AMOUNT, 0)
-
-        ltv = 60
-        if property_value and mortgage_amount:
-            ltv = int(round((mortgage_amount / property_value) * 100))
-            ltv = max(ltv, 1)
-
-        band = self._nearest_ltv_band(purpose, ltv)
+        band = self._nearest_ltv_band(purpose, self._loan_to_value() or 60)
         return template.format(ltv=band)
 
     def _nearest_ltv_band(self, purpose: str, ltv: int) -> int:

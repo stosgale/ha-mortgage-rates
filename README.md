@@ -71,6 +71,8 @@ Examples:
 
 Rate data is sourced from **moneyfactscompare.co.uk** and refreshed once per day. The data is provided for informational purposes only and does not constitute financial advice.
 
+Tracked lenders that publish their own rates may be read directly from the lender's website instead, because the comparison chart is not always up to date for every lender. **HSBC** is read from its existing-customer switch rates page (`hsbc.co.uk/mortgages/existing-customers/switch/rates/`) so the HSBC sensors reflect the rates HSBC actually advertises. Buy-to-let and Premier-only products are excluded to stay comparable with the rest of the chart. If the lender page cannot be fetched the aggregator data is kept.
+
 ## Limitations
 
 - **Best rate = lowest initial rate per group.** Products are ranked by their initial interest rate within each `(rate_type, term)` group, not by total cost over the term.
